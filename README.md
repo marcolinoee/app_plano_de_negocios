@@ -1,40 +1,61 @@
 # 💠 Master Management - Plano de Negócios 5.0
 
-> **Simulador de Viabilidade Econômico-Financeira e Estratégica**
+> **Ecossistema Inteligente de Viabilidade Estratégica, Financeira e Análise de Risco com IA.**
 
-O **Master Management Plano 5.0** é uma solução robusta desenvolvida para transformar a criação de planos de negócios em uma experiência analítica de alta precisão. Projetado para o ambiente acadêmico e profissional de engenharia e gestão, o software une a modelagem estratégica do Canvas com o rigor da matemática financeira e o poder da Inteligência Artificial.
+O **Master Management 5.0** é uma plataforma avançada de simulação de negócios, projetada para unir o rigor técnico da engenharia econômica com a agilidade das metodologias ágeis de gestão. Desenvolvido para atender tanto o ambiente corporativo quanto o acadêmico, o software transforma dados brutos em decisões fundamentadas e relatórios executivos de alta fidelidade.
 
 ---
 
-## 🚀 Estrutura do Software
+## 🚀 Arquitetura de Informação (Os 10 Pilares)
 
-O sistema guia o usuário através de 8 pilares fundamentais:
+O sistema guia o usuário através de uma jornada lógica dividida em 10 interfaces funcionais:
 
-1.  **🧩 Canvas:** Modelagem estratégica (Parceiros, Valor, Segmentos, etc).
-2.  **📈 Premissas:** Definição de horizontes temporais, TMA, Inflação e **Sazonalidade Mensal**.
-3.  **🛠️ Capex:** Gestão de investimentos iniciais e ativos imobilizados.
-4.  **🔄 Opex:** Controle de custos fixos, folha de pagamento e estrutura.
-5.  **🏷️ Precificação:** Cálculo de Markup dinâmico e preço de venda sugerido.
-6.  **📄 Resumo:** Visão consolidada de todos os dados do projeto.
+1.  **🧩 Canvas:** Modelagem estratégica visual (Parceiros, Proposta de Valor, Segmentos e Canais).
+2.  **📈 Premissas:** Configuração de horizontes temporais, TMA, inflação e **Sazonalidade Mensal** de vendas.
+3.  **🛠️ Capex:** Gestão detalhada de investimentos iniciais e ativos imobilizados.
+4.  **🔄 Opex:** Controle de custos fixos, folha de pagamento e despesas operacionais (RH e Estrutura).
+5.  **🏷️ Preços:** Motor de precificação baseado em Ficha Técnica, Markup e Margem de Contribuição.
+6.  **📄 Resumo:** Visão executiva consolidada de todos os dados estratégicos e financeiros do projeto.
 7.  **📊 Viabilidade:** Motor financeiro mensal com cálculo de **VPL**, **TIR Anualizada** e **Payback**.
-8.  **🤖 IA Mentor:** Consultoria via Gemini API para benchmarking e análise de crédito.
+8.  **🤖 IA Mentor:** Consultoria sênior via Gemini API para diagnóstico de viabilidade, riscos e recomendações.
+9.  **📉 Dashboard:** Métricas de tração digital para startups (**CAC, LTV, MRR, Churn e Runway**).
+10. **🖨️ Relatório:** Geração automatizada de **Dossiê em PDF** incluindo gráficos de fluxo de caixa e parecer técnico.
 
 ---
 
 ## 🛠️ Stack Tecnológica
 
-* **Python 3.12+**
-* **Streamlit** (UI/UX Premium)
-* **SQLAlchemy** (Banco de Dados SQLite)
-* **Numpy-Financial** (Cálculos de VPL/TIR)
-* **Plotly** (Gráficos Dinâmicos)
-* **Google Generative AI** (Integração LLM)
+O projeto utiliza uma stack focada em precisão matemática, performance e portabilidade:
+
+* **Linguagem:** Python 3.12+.
+* **Interface:** Streamlit (UI/UX reativa de alta fidelidade).
+* **Banco de Dados:** SQLAlchemy com SQLite (Persistência local robusta).
+* **Engine Financeira:** Numpy-Financial (Precisão em cálculos de engenharia econômica).
+* **Visualização:** Plotly & Kaleido (Gráficos dinâmicos exportáveis para o relatório).
+* **Inteligência Artificial:** Google Generative AI (Gemini 2.5 Flash).
+* **Documentação:** FPDF2 (Geração de relatórios executivos em PDF).
 
 ---
 
-## 📦 Compilação e Distribuição
+## 📦 Distribuição (Build Institucional)
 
-Para gerar o executável institucional (.exe), utilize o PyInstaller a partir da raiz do projeto:
+Para compilar o sistema como um executável Windows (.exe), garantindo a inclusão de todas as dependências de IA e bibliotecas gráficas, utilize o comando abaixo:
+
+## 👤 Desenvolvedor
+
+Anderson Oliveira
+
+Engenheiro Eletricista e Professor de Ensino Superior.
+
+Mestre em Engenharia e Doutorando no PPGES.
+
+Especialista na criação de materiais didáticos estruturados e ferramentas de automação para engenharia.
 
 ```bash
-pyinstaller --noconfirm --onedir --add-data "app.py;." --add-data "banco_dados.py;." --copy-metadata streamlit --copy-metadata google-generativeai --copy-metadata plotly --name "Master_Management_Plano_5" lancador.py
+pyinstaller --noconfirm --onedir --add-data "app.py;." \
+--add-data "banco_dados.py;." \
+--add-data "assets/;assets/" \
+--copy-metadata streamlit \
+--copy-metadata google-generativeai \
+--copy-metadata plotly \
+--name "Master_Management_5" lancador.py

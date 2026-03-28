@@ -35,7 +35,7 @@ _BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 _LOGO_PATH = os.path.join(_BASE_DIR, "logo.png")
 _FONTE_PATH = os.path.join(_BASE_DIR, "assets", "DejaVuSans.ttf")
 
-st.set_page_config(page_title="Master Management - Plano 5.0", page_icon="💠", layout="wide")
+st.set_page_config(page_title="Master Management - Plano 6.0", page_icon="💠", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # IDENTIDADE VISUAL MASTER MANAGEMENT (CSS)
@@ -46,7 +46,7 @@ st.markdown("""
     .stApp { background-color: #FAFAFA; }
     
     /* Ocultar elementos nativos */
-    #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
+    #MainMenu {visibility: hidden;} footer {visibility: hidden;}
     
     /* Estilizar as Abas (Tabs) */
     .stTabs [data-baseweb="tab-list"] {
@@ -122,12 +122,104 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# INICIALIZAÇÃO
+# SIDEBAR: GERENCIADOR DE PROJETOS (CRUD)
 # ==========================================
-projeto = session.query(ProjetoDB).first()
-if not projeto:
-    projeto = ProjetoDB(nome_empresa="Nova Empresa")
-    session.add(projeto); session.commit()
+with st.sidebar:
+    st.image("https://images.unsplash.com/photo-1551288049-bebda4e38f71?q=80&w=1000&auto=format&fit=crop", width="stretch")
+    st.title("📁 Meus Projetos")
+    
+    # 1. Busca todos os projetos
+    todos_projetos = session.query(ProjetoDB).all()
+    
+    # 2. Se o banco estiver vazio, cria o projeto fundacional
+    if not todos_projetos:
+        novo = ProjetoDB(nome_empresa="Nova Empresa")
+        session.add(novo)
+        session.commit()
+        todos_projetos = [novo]
+        
+    # 3. Gerencia o Estado da Sessão (Qual projeto está aberto?)
+    if 'projeto_atual_id' not in st.session_state:
+        st.session_state['projeto_atual_id'] = todos_projetos[0].id
+        
+    # Proteção: Se o ID salvo na sessão foi deletado, volta pro primeiro
+    ids_existentes = [p.id for p in todos_projetos]
+    if st.session_state['projeto_atual_id'] not in ids_existentes:
+        st.session_state['projeto_atual_id'] = ids_existentes[0]
+
+    # 4. Read (Caixa de Seleção de Projetos)
+    opcoes_projetos = {p.id: p.nome_empresa for p in todos_projetos}
+    projeto_selecionado_id = st.selectbox(
+        "Projeto Ativo:",
+        options=list(opcoes_projetos.keys()),
+        format_func=lambda x: opcoes_projetos[x],
+        index=list(opcoes_projetos.keys()).index(st.session_state['projeto_atual_id'])
+    )
+    
+    # Se o usuário trocou no selectbox, atualiza a sessão e recarrega a tela
+    if projeto_selecionado_id != st.session_state['projeto_atual_id']:
+        st.session_state['projeto_atual_id'] = projeto_selecionado_id
+        st.rerun()
+
+    st.markdown("---")
+    st.subheader("⚙️ Ações do Gerenciador")
+
+    # 5. Create (Novo Projeto)
+    with st.form("form_novo_proj", clear_on_submit=True):
+        novo_nome = st.text_input("Nome da Nova Empresa")
+        if st.form_submit_button("➕ Criar Novo Projeto") and novo_nome:
+            novo_proj = ProjetoDB(nome_empresa=novo_nome)
+            session.add(novo_proj)
+            session.commit()
+            st.session_state['projeto_atual_id'] = novo_proj.id
+            st.success("Projeto criado!")
+            st.rerun()
+
+    # 6. Update (Renomear)
+    with st.expander("✏️ Renomear Projeto Atual"):
+        with st.form("form_renomear"):
+            novo_nome_atual = st.text_input("Novo Nome", value=opcoes_projetos[st.session_state['projeto_atual_id']])
+            if st.form_submit_button("Salvar") and novo_nome_atual:
+                proj_editar = session.get(ProjetoDB, st.session_state['projeto_atual_id'])
+                proj_editar.nome_empresa = novo_nome_atual
+                session.commit()
+                st.rerun()
+
+    # 7. Delete (Excluir)
+    with st.expander("🗑️ Excluir Projeto Atual"):
+        st.warning("⚠️ Atenção: A exclusão é permanente.")
+        if st.button("Confirmar Exclusão", type="primary"):
+            if len(todos_projetos) > 1:
+                proj_deletar = session.get(ProjetoDB, st.session_state['projeto_atual_id'])
+                session.delete(proj_deletar)
+                session.commit()
+                # Atualiza para o primeiro disponível no banco
+                restantes = session.query(ProjetoDB).all()
+                st.session_state['projeto_atual_id'] = restantes[0].id
+                st.rerun()
+            else:
+                st.error("Você não pode excluir o único projeto restante.")
+    # ==========================================
+    # 🔌 BOTÃO DE DESLIGAMENTO DO SERVIDOR
+    # ==========================================
+    st.markdown("---")
+    st.subheader("🔌 Sistema")
+    st.caption("Ao terminar de usar, encerre o servidor para liberar a memória do computador.")
+    
+    if st.button("Desligar Master Management", type="primary"):
+        st.success("Servidor encerrado com segurança! Você já pode fechar esta aba do navegador.")
+        import os
+        import time
+        time.sleep(2) # Dá tempo de mostrar a mensagem verde antes de matar o processo
+        os._exit(0)   # Comando bruto do Sistema Operacional que mata a raiz do servidor
+
+# ==========================================
+# INICIALIZAÇÃO DO PROJETO ATIVO
+# ==========================================
+# Carrega do banco de dados exatamente a instância que está na sessão
+projeto = session.get(ProjetoDB, st.session_state['projeto_atual_id'])
+
+# Garante que as dependências vitais 1:1 existam (Gatilhos de segurança)
 if not projeto.canvas:
     session.add(CanvasDB(projeto_id=projeto.id)); session.commit(); session.refresh(projeto)
 if not hasattr(projeto, 'premissas') or not projeto.premissas:
@@ -359,7 +451,6 @@ with aba7:
 
     vpl = npf.npv(tma_am, fluxo_caixa)
 
-    # FIX 1.1 — TIR com tratamento correto de exceções e flag de validade
     tir_aa = 0.0
     tir_valida = False
     try:
@@ -440,7 +531,6 @@ with aba9:
     safe_image("https://images.unsplash.com/photo-1551288049-bebda4e38f71?q=80&w=1000&auto=format&fit=crop", width="stretch")
     st.header("📉 Dashboard de Indicadores")
  
-    # ── Verificação de dados mínimos ────────────────────────────────────────
     sem_produtos  = len(projeto.produtos) == 0
     sem_capex     = capex_total == 0
     sem_custos    = custo_fixo_base == 0
@@ -449,34 +539,24 @@ with aba9:
         st.warning("⚠️ Cadastre ao menos um produto na aba **Preços** para visualizar os indicadores.")
         st.stop()
  
-    # ── Cálculos base ───────────────────────────────────────────────────────
     receita_liq   = receita_base - deducoes_base
     margem_bruta  = receita_liq - custo_var_base
     mc_pct        = (margem_bruta / receita_base * 100) if receita_base > 0 else 0
     lucro_liq     = margem_bruta - custo_fixo_base
     liq_pct       = (lucro_liq / receita_base * 100) if receita_base > 0 else 0
  
-    # Ponto de Equilíbrio
     pe_receita    = (custo_fixo_base / (mc_pct / 100)) if mc_pct > 0 else 0
- 
-    # Índice de Lucratividade (VPL / Capex)
     il            = (vpl / capex_total) if capex_total > 0 else 0
- 
-    # ROI simples sobre lucro mensal
     roi_mensal    = (lucro_liq / capex_total * 100) if capex_total > 0 else 0
- 
-    # Burn Rate e Runway
     burn_rate     = custo_fixo_base + custo_var_base
     runway_meses  = (capex_total / abs(lucro_liq)) if lucro_liq < 0 and capex_total > 0 else None
  
-    # Meses até atingir PE (ponto de equilíbrio acumulado)
     meses_pe = "Não recupera"
     for i, v in enumerate(fluxo_acumulado):
         if v >= 0 and i > 0:
             meses_pe = f"{i} meses"
             break
  
-    # ── SEÇÃO 1: Resumo Executivo ───────────────────────────────────────────
     st.subheader("Resumo Executivo")
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Receita Bruta/mês",  f"R$ {receita_base:,.2f}")
@@ -485,8 +565,6 @@ with aba9:
     col4.metric("Ponto de Equilíbrio", f"R$ {pe_receita:,.2f}/mês")
  
     st.markdown("---")
- 
-    # ── SEÇÃO 2: DRE — Demonstração de Resultados ──────────────────────────
     st.subheader("DRE Simplificada (Base Mensal)")
  
     dre_items = [
@@ -517,8 +595,6 @@ with aba9:
         )
  
     st.markdown("---")
- 
-    # ── SEÇÃO 3: Indicadores de Viabilidade ────────────────────────────────
     st.subheader("Indicadores de Viabilidade")
  
     col1, col2, col3 = st.columns(3)
@@ -544,13 +620,10 @@ with aba9:
             st.metric("Resultado mensal", "Positivo ✓")
  
     st.markdown("---")
- 
-    # ── SEÇÃO 4: Gráficos ──────────────────────────────────────────────────
     st.subheader("Análise Visual")
  
     col_left, col_right = st.columns(2)
  
-    # Gráfico 1: Estrutura de Custos (pizza)
     with col_left:
         st.markdown("**Composição de Custos Mensais**")
         labels_pizza = ["Custos Variáveis", "Custos Fixos", "Deduções"]
@@ -577,7 +650,6 @@ with aba9:
         )
         st.plotly_chart(fig_pizza, width="stretch")
  
-    # Gráfico 2: Receita por Produto (barras)
     with col_right:
         st.markdown("**Receita por Produto/Serviço**")
         nomes_prod   = [p.nome_produto for p in projeto.produtos]
@@ -610,7 +682,6 @@ with aba9:
         )
         st.plotly_chart(fig_prod, width="stretch")
  
-    # Gráfico 3: Perfil de Sazonalidade
     st.markdown("**Perfil de Sazonalidade das Vendas**")
     meses_nomes = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
     saz_vals    = [
@@ -645,8 +716,6 @@ with aba9:
     st.plotly_chart(fig_saz, width="stretch")
  
     st.markdown("---")
- 
-    # ── SEÇÃO 5: Indicadores para Startups TIC ─────────────────────────────
     st.subheader("Indicadores de Tração Digital (Startups TIC)")
     st.caption("Preencha abaixo para calcular métricas de SaaS/App. Opcional — apenas para projetos digitais.")
  
@@ -686,7 +755,7 @@ with aba9:
 # ==========================================
 with aba10:
     safe_image("https://images.unsplash.com/photo-1618044733300-9472054094ee?q=80&w=1000&auto=format&fit=crop", width="stretch")
-    st.header("🖨️ Gerador de Dossiê Executivo V5.0")
+    st.header("🖨️ Gerador de Dossiê Executivo V6.0")
     
     parecer_ia_input = st.text_area(
         "Parecer do Mentor IA (Cole aqui o resultado da aba anterior):", 
@@ -700,13 +769,12 @@ with aba10:
                 pdf = FPDF()
                 pdf.set_auto_page_break(auto=True, margin=15)
                 
-                # Configuração de Fontes (DejaVu para acentuação correta)
                 _fn = "DejaVu" if os.path.exists(_FONTE_PATH) else "helvetica"
                 if _fn == "DejaVu":
                     pdf.add_font("DejaVu", "", _FONTE_PATH)
                     pdf.add_font("DejaVu", "B", _FONTE_PATH)
 
-                # --- PÁGINA 1: CAPA PROFISSIONAL ---
+                # PÁGINA 1
                 pdf.add_page()
                 pdf.ln(60)
                 pdf.set_font(_fn, "B", 24)
@@ -715,9 +783,9 @@ with aba10:
                 pdf.cell(pdf.epw, 10, projeto.nome_empresa.upper(), new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
                 pdf.ln(10)
                 pdf.set_font(_fn, "", 10)
-                pdf.cell(pdf.epw, 10, "Documento gerado via Master Management Plano 5.0", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+                pdf.cell(pdf.epw, 10, "Documento gerado via Master Management Plano 6.0", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
 
-                # --- PÁGINA 2: ESTRUTURA ESTRATÉGICA (CANVAS) ---
+                # PÁGINA 2
                 pdf.add_page()
                 pdf.set_font(_fn, "B", 14)
                 pdf.cell(pdf.epw, 10, "1. Modelo de Negócios (Estrutura Canvas)", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
@@ -732,13 +800,12 @@ with aba10:
                 pdf.set_font(_fn, "B", 11); pdf.cell(pdf.epw, 8, "Público-Alvo e Segmentos:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
                 pdf.set_font(_fn, "", 10); pdf.multi_cell(pdf.epw, 6, projeto.canvas.segmentos if projeto.canvas else "Não informado")
 
-                # --- PÁGINA 3: INDICADORES FINANCEIROS ---
+                # PÁGINA 3
                 pdf.add_page()
                 pdf.set_font(_fn, "B", 14)
                 pdf.cell(pdf.epw, 10, "2. Análise de Viabilidade Financeira", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
                 pdf.ln(5)
                 
-                # Tabela de Indicadores
                 pdf.set_font(_fn, "B", 10)
                 pdf.cell(pdf.epw*0.5, 8, "Indicador", border=1); pdf.cell(pdf.epw*0.5, 8, "Valor", border=1, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
                 pdf.set_font(_fn, "", 10)
@@ -748,9 +815,6 @@ with aba10:
                 
                 pdf.ln(10)
                 
-                # --- INSERÇÃO DOS GRÁFICOS (Correção de Integração) ---
-                
-                # 1. Gráfico de Fluxo de Caixa (da Aba 7)
                 try:
                     img_caixa = fig_to_bytes(fig)
                     if img_caixa:
@@ -761,7 +825,6 @@ with aba10:
                 except Exception as e:
                     st.warning(f"Aviso: Não foi possível renderizar o gráfico de fluxo de caixa no PDF. {e}")
 
-                # 2. Gráficos do Dashboard (da Aba 9 - Somente se houver produtos cadastrados)
                 if len(projeto.produtos) > 0:
                     try:
                         pdf.add_page()
@@ -769,16 +832,13 @@ with aba10:
                         pdf.cell(pdf.epw, 10, "3. Análise Visual (Dashboard)", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
                         pdf.ln(5)
 
-                        # Gráfico de Pizza (Custos)
                         img_pizza = fig_to_bytes(fig_pizza)
                         if img_pizza:
                             pdf.set_font(_fn, "B", 12)
                             pdf.cell(pdf.epw, 8, "Composição de Custos Mensais", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
-                            # Tamanho reduzido e margem ajustada para centralizar a pizza
                             pdf.image(io.BytesIO(img_pizza), x=35, w=140) 
                             pdf.ln(10)
                             
-                        # Gráfico de Barras (Receita)
                         img_prod = fig_to_bytes(fig_prod)
                         if img_prod:
                             pdf.set_font(_fn, "B", 12)
@@ -788,7 +848,7 @@ with aba10:
                     except Exception as e:
                         st.warning(f"Aviso: Não foi possível renderizar os dashboards no PDF. {e}")
 
-                # --- PÁGINA FINAL: PARECER TÉCNICO ---
+                # PÁGINA FINAL
                 pdf.add_page()
                 pdf.set_font(_fn, "B", 14)
                 num_sessao = "4." if len(projeto.produtos) > 0 else "3."
@@ -800,7 +860,6 @@ with aba10:
                 texto_limpo = texto_final.replace("•", "-").replace("\u2022", "-").replace("·", "-")
                 pdf.multi_cell(pdf.epw, 6, texto_limpo)
 
-                # Finalização e Download
                 pdf_output = pdf.output()
                 pdf_bytes = bytes(pdf_output) if not isinstance(pdf_output, bytes) else pdf_output
                 

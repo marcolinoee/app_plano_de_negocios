@@ -1,0 +1,9 @@
+streamlit
+pandas
+SQLAlchemy
+numpy-financial
+plotly
+google-generativeai
+google-genai
+fpdf2
+kaleido==1.2.0

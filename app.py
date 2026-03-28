@@ -1,12 +1,13 @@
 import sys
 import streamlit as st
 import plotly.graph_objects as go
-import google.generativeai as genai
+from google import genai
 import numpy_financial as npf
 import pandas as pd
 import os
-from fpdf import FPDF
 import io
+from fpdf import FPDF
+from fpdf.enums import XPos, YPos
 from banco_dados import session, ProjetoDB, CanvasDB, PremissasFinanceirasDB, InvestimentoDB, CustoFixoDB, ProdutoDB
 
 # ==========================================
@@ -20,6 +21,14 @@ def safe_image(url: str, **kwargs):
         st.image(url, **kwargs)
     except Exception:
         pass  # Offline: omite a imagem sem quebrar a interface
+
+def fig_to_bytes(fig):
+    """Converte gráficos Plotly em bytes PNG usando o motor Kaleido."""
+    try:
+        return fig.to_image(format="png", width=1000, height=550, scale=2)
+    except Exception as e:
+        st.error(f"Erro ao converter gráfico: {e}")
+        return None
 
 # Path base do executável (funciona tanto em .py quanto em .exe)
 _BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -128,7 +137,7 @@ if not hasattr(projeto, 'premissas') or not projeto.premissas:
 col_logo, col_titulo = st.columns([1, 3])
 with col_logo:
     if os.path.exists(_LOGO_PATH):
-        st.image(_LOGO_PATH, use_container_width=True)
+        st.image(_LOGO_PATH, width="stretch")
     else:
         st.markdown("### 💠 MASTER MGT")
 with col_titulo:
@@ -142,7 +151,6 @@ aba1, aba2, aba3, aba4, aba5, aba6, aba7, aba8, aba9, aba10 = st.tabs([
        "🧩 Canvas", "📈 Premissas", "🛠️ Capex", "🔄 Opex",
        "🏷️ Preços", "📄 Resumo", "📊 Viabilidade", "🤖 IA", "📉 Dashboard", 
        "🖨️ Relatório"
-       
    ])
  
 
@@ -150,7 +158,7 @@ aba1, aba2, aba3, aba4, aba5, aba6, aba7, aba8, aba9, aba10 = st.tabs([
 # ABA 1: CANVAS
 # ==========================================
 with aba1:
-    safe_image("https://images.unsplash.com/photo-1552664730-d307ca884978?q=80&w=1000&auto=format&fit=crop", use_container_width=True)
+    safe_image("https://images.unsplash.com/photo-1552664730-d307ca884978?q=80&w=1000&auto=format&fit=crop", width="stretch")
     st.header("Business Model Canvas")
     with st.form("form_canvas"):
         c1, c2, c3, c4, c5 = st.columns(5)
@@ -178,7 +186,7 @@ with aba1:
 # ABA 2: PREMISSAS E SAZONALIDADE
 # ==========================================
 with aba2:
-    safe_image("https://images.unsplash.com/photo-1460925895917-afdab827c52f?q=80&w=1000&auto=format&fit=crop", use_container_width=True)
+    safe_image("https://images.unsplash.com/photo-1460925895917-afdab827c52f?q=80&w=1000&auto=format&fit=crop", width="stretch")
     st.header("Premissas e Perfil de Sazonalidade")
     with st.form("form_premissas"):
         c1, c2, c3, c4 = st.columns(4)
@@ -218,7 +226,7 @@ with aba2:
 # ABA 3 e 4: CAPEX e OPEX
 # ==========================================
 with aba3:
-    safe_image("https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?q=80&w=1000&auto=format&fit=crop", use_container_width=True)
+    safe_image("https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?q=80&w=1000&auto=format&fit=crop", width="stretch")
     st.header("Plano de Investimentos (Capex)")
     
     with st.form("form_capex", clear_on_submit=True):
@@ -242,7 +250,7 @@ with aba3:
                 st.rerun()
                 
 with aba4:
-    safe_image("https://images.unsplash.com/photo-1497366216548-37526070297c?q=80&w=1000&auto=format&fit=crop", use_container_width=True)
+    safe_image("https://images.unsplash.com/photo-1497366216548-37526070297c?q=80&w=1000&auto=format&fit=crop", width="stretch")
     st.header("Custos Fixos e RH (Opex)")
     with st.form("form_opex", clear_on_submit=True):
         c1, c2, c3 = st.columns([1, 2, 1])
@@ -268,7 +276,7 @@ with aba4:
 # ABA 5: PRECIFICAÇÃO
 # ==========================================
 with aba5:
-    safe_image("https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?q=80&w=1000&auto=format&fit=crop", use_container_width=True)
+    safe_image("https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?q=80&w=1000&auto=format&fit=crop", width="stretch")
     st.header("Ficha Técnica e Precificação")
     with st.form("form_preco", clear_on_submit=True):
         nome_prod = st.text_input("Produto/Serviço")
@@ -303,7 +311,7 @@ with aba5:
 # ABA 6: RESUMO EXECUTIVO
 # ==========================================
 with aba6:
-    safe_image("https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?q=80&w=1000&auto=format&fit=crop", use_container_width=True)
+    safe_image("https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?q=80&w=1000&auto=format&fit=crop", width="stretch")
     st.header("📄 Resumo Executivo")
     with st.expander("🧩 Eixo Estratégico", expanded=True):
         st.markdown(f"**Proposta de Valor:** {projeto.canvas.proposta_valor}")
@@ -318,7 +326,7 @@ with aba6:
 # ABA 7: VIABILIDADE MENSAL
 # ==========================================
 with aba7:
-    safe_image("https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=1000&auto=format&fit=crop", use_container_width=True)
+    safe_image("https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=1000&auto=format&fit=crop", width="stretch")
     st.header("Análise de Viabilidade (Mês a Mês)")
     anos = projeto.premissas.horizonte_anos
     meses_totais = anos * 12
@@ -385,15 +393,16 @@ with aba7:
     fig = go.Figure(data=[go.Bar(name='Fluxo Mensal', x=meses_labels, y=fluxo_caixa, marker_color=['#111111' if val < 0 else '#FA5A5A' for val in fluxo_caixa])])
     fig.add_trace(go.Scatter(name='Caixa Acumulado', x=meses_labels, y=fluxo_acumulado, mode='lines', line=dict(color='#888888', width=2)))
     fig.update_layout(barmode='group', height=500)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 # ==========================================
 # ABA 8: MENTOR IA
 # ==========================================
 with aba8:
-    safe_image("https://images.unsplash.com/photo-1677442136019-21780ecad995?q=80&w=1000&auto=format&fit=crop", use_container_width=True)
+    safe_image("https://images.unsplash.com/photo-1677442136019-21780ecad995?q=80&w=1000&auto=format&fit=crop", width="stretch")
     st.header("🧠 Parecer Final do Comitê (IA)")
     api_key_final = st.text_input("Sua Chave API Gemini:", type="password")
+    
     if api_key_final and st.button("Gerar Dossiê de Captação"):
         tir_str = f"{tir_aa:.2f}%" if tir_valida else "não calculada (projeto sem retorno positivo no horizonte)"
         prompt_ia = f"""Você é um analista financeiro sênior. Avalie a viabilidade do projeto abaixo e forneça um parecer executivo em português.
@@ -415,14 +424,20 @@ Com base nesses dados, forneça:
 3. Recomendações estratégicas
 4. Comparativo com benchmarks do setor (se aplicável)"""
         try:
-            genai.configure(api_key=api_key_final)
-            st.markdown(genai.GenerativeModel('models/gemini-2.5-flash').generate_content(prompt_ia).text)
-        except Exception as e: st.error(f"Erro: {e}")
+            client = genai.Client(api_key=api_key_final)
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt_ia
+            )
+            st.markdown(response.text)
+        except Exception as e:
+            st.error(f"Erro ao consultar IA: {e}")
+
 # ==========================================
 # ABA 9: DASHBOARD DE INDICADORES
 # ==========================================
 with aba9:
-    safe_image("https://images.unsplash.com/photo-1551288049-bebda4e38f71?q=80&w=1000&auto=format&fit=crop", use_container_width=True)
+    safe_image("https://images.unsplash.com/photo-1551288049-bebda4e38f71?q=80&w=1000&auto=format&fit=crop", width="stretch")
     st.header("📉 Dashboard de Indicadores")
  
     # ── Verificação de dados mínimos ────────────────────────────────────────
@@ -560,7 +575,7 @@ with aba9:
                 x=0.5, y=0.5, font_size=13, showarrow=False
             )]
         )
-        st.plotly_chart(fig_pizza, use_container_width=True)
+        st.plotly_chart(fig_pizza, width="stretch")
  
     # Gráfico 2: Receita por Produto (barras)
     with col_right:
@@ -593,7 +608,7 @@ with aba9:
             margin=dict(t=10, b=10, l=10, r=10),
             yaxis=dict(tickprefix="R$ ", tickformat=",.0f")
         )
-        st.plotly_chart(fig_prod, use_container_width=True)
+        st.plotly_chart(fig_prod, width="stretch")
  
     # Gráfico 3: Perfil de Sazonalidade
     st.markdown("**Perfil de Sazonalidade das Vendas**")
@@ -627,7 +642,7 @@ with aba9:
         margin=dict(t=20, b=10, l=10, r=10),
         yaxis=dict(tickprefix="R$ ", tickformat=",.0f")
     )
-    st.plotly_chart(fig_saz, use_container_width=True)
+    st.plotly_chart(fig_saz, width="stretch")
  
     st.markdown("---")
  
@@ -665,84 +680,137 @@ with aba9:
                     st.warning(f"⚠️ LTV/CAC de {ltv_cac:.1f}x está marginal. Benchmarks saudáveis ficam acima de 3x.")
                 else:
                     st.error(f"❌ LTV/CAC abaixo de 1x significa que custa mais adquirir um cliente do que ele gera.")
+
 # ==========================================
 # ABA 10: RELATÓRIO EXECUTIVO (PDF)
 # ==========================================
 with aba10:
-    safe_image("https://images.unsplash.com/photo-1618044733300-9472054094ee?q=80&w=1000&auto=format&fit=crop", use_container_width=True)
-    st.header("🖨️ Relatório Executivo (PDF)")
+    safe_image("https://images.unsplash.com/photo-1618044733300-9472054094ee?q=80&w=1000&auto=format&fit=crop", width="stretch")
+    st.header("🖨️ Gerador de Dossiê Executivo V5.0")
     
-    # CRIANDO A VARIÁVEL: Sem esta linha, o erro "not defined" acontece
-    parecer_ia = st.text_area(
-        "Parecer do Mentor IA (Cole aqui o resultado gerado na aba anterior):", 
-        height=200
+    parecer_ia_input = st.text_area(
+        "Parecer do Mentor IA (Cole aqui o resultado da aba anterior):", 
+        height=200,
+        help="Este texto será formatado automaticamente no PDF final."
     )
 
-    if st.button("Gerar PDF do Projeto", type="primary"):
+    if st.button("🚀 Gerar Relatório Completo", type="primary"):
         try:
-            pdf = FPDF()
-            pdf.add_page()
-            pdf.set_auto_page_break(auto=True, margin=15)
+            with st.spinner("Compilando dados e renderizando gráficos de alta resolução... (Isso pode levar alguns segundos)"):
+                pdf = FPDF()
+                pdf.set_auto_page_break(auto=True, margin=15)
+                
+                # Configuração de Fontes (DejaVu para acentuação correta)
+                _fn = "DejaVu" if os.path.exists(_FONTE_PATH) else "helvetica"
+                if _fn == "DejaVu":
+                    pdf.add_font("DejaVu", "", _FONTE_PATH)
+                    pdf.add_font("DejaVu", "B", _FONTE_PATH)
 
-            # 1. Configuração da Fonte
-            if os.path.exists(_FONTE_PATH):
-                pdf.add_font("DejaVu", "", _FONTE_PATH)
-                pdf.add_font("DejaVu", "B", _FONTE_PATH)
-                _fn = "DejaVu"
-            else:
-                st.warning("⚠️ Fonte DejaVu não encontrada. Usando Helvetica.")
-                _fn = "helvetica"
-
-            # Título
-            pdf.set_font(_fn, "B", 16)
-            pdf.cell(pdf.epw, 10, f"Plano de Negocios: {projeto.nome_empresa}", ln=True, align="C")
-            pdf.ln(5)
-            
-            # --- 1. Resumo Executivo (Canvas) ---
-            pdf.set_font(_fn, "B", 12)
-            pdf.cell(pdf.epw, 8, "1. Resumo Executivo (Estrutura Canvas)", ln=True)
-            pdf.set_font(_fn, "", 10)
-            
-            if projeto.canvas:
-                pdf.set_x(pdf.l_margin) 
-                pdf.multi_cell(pdf.epw, 6, f"Proposta de Valor: {projeto.canvas.proposta_valor}")
-                pdf.multi_cell(pdf.epw, 6, f"Publico-Alvo: {projeto.canvas.segmentos}")
-                pdf.multi_cell(pdf.epw, 6, f"Fontes de Receita: {projeto.canvas.fontes_receita}")
-            
-            pdf.ln(5)
-            
-            # --- 2. Indicadores Financeiros ---
-            pdf.set_font(_fn, "B", 12)
-            pdf.cell(pdf.epw, 8, "2. Indicadores Financeiros", ln=True)
-            pdf.set_font(_fn, "", 10)
-            pdf.cell(pdf.epw, 6, f"Investimento Inicial (Capex): R$ {capex_total:,.2f}", ln=True)
-            pdf.cell(pdf.epw, 6, f"VPL: R$ {vpl:,.2f}", ln=True)
-            
-            tir_texto = f"{tir_aa:,.2f}%" if tir_valida else "Nao calculada"
-            pdf.cell(pdf.epw, 6, f"TIR a.a.: {tir_texto}", ln=True)
-            pdf.cell(pdf.epw, 6, f"Payback: {payback_meses}", ln=True)
-            pdf.ln(5)
-            
-            # --- 3. Parecer da IA ---
-            if parecer_ia: # Agora a variável existe e o 'if' funciona
-                pdf.set_font(_fn, "B", 12)
-                pdf.cell(pdf.epw, 8, "3. Parecer Tecnico (Mentor IA)", ln=True)
+                # --- PÁGINA 1: CAPA PROFISSIONAL ---
+                pdf.add_page()
+                pdf.ln(60)
+                pdf.set_font(_fn, "B", 24)
+                pdf.cell(pdf.epw, 20, "DOSSIÊ DE VIABILIDADE", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+                pdf.set_font(_fn, "", 18)
+                pdf.cell(pdf.epw, 10, projeto.nome_empresa.upper(), new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+                pdf.ln(10)
                 pdf.set_font(_fn, "", 10)
-                texto_limpo = parecer_ia.replace("•", "-").replace("\u2022", "-")
-                pdf.multi_cell(pdf.epw, 6, txt=texto_limpo)
+                pdf.cell(pdf.epw, 10, "Documento gerado via Master Management Plano 5.0", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
 
-            # Finalização e Download
-            pdf_output = pdf.output()
-            # Garante que temos bytes para o download_button
-            pdf_bytes = bytes(pdf_output) if not isinstance(pdf_output, bytes) else pdf_output
-            
-            st.success("✅ Relatório compilado com sucesso!")
-            st.download_button(
-                label="📥 Fazer Download do PDF",
-                data=pdf_bytes,
-                file_name=f"Relatorio_{projeto.nome_empresa}.pdf",
-                mime="application/pdf"
-            )
-            
+                # --- PÁGINA 2: ESTRUTURA ESTRATÉGICA (CANVAS) ---
+                pdf.add_page()
+                pdf.set_font(_fn, "B", 14)
+                pdf.cell(pdf.epw, 10, "1. Modelo de Negócios (Estrutura Canvas)", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+                pdf.ln(5)
+                
+                pdf.set_font(_fn, "", 10)
+                pdf.set_font(_fn, "B", 11); pdf.cell(pdf.epw, 8, "Proposta de Valor:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.set_font(_fn, "", 10); pdf.multi_cell(pdf.epw, 6, projeto.canvas.proposta_valor if projeto.canvas else "Não informado")
+                
+                pdf.ln(4)
+                pdf.set_font(_fn, "B", 11); pdf.cell(pdf.epw, 8, "Público-Alvo e Segmentos:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.set_font(_fn, "", 10); pdf.multi_cell(pdf.epw, 6, projeto.canvas.segmentos if projeto.canvas else "Não informado")
+
+                # --- PÁGINA 3: INDICADORES FINANCEIROS ---
+                pdf.add_page()
+                pdf.set_font(_fn, "B", 14)
+                pdf.cell(pdf.epw, 10, "2. Análise de Viabilidade Financeira", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.ln(5)
+                
+                # Tabela de Indicadores
+                pdf.set_font(_fn, "B", 10)
+                pdf.cell(pdf.epw*0.5, 8, "Indicador", border=1); pdf.cell(pdf.epw*0.5, 8, "Valor", border=1, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.set_font(_fn, "", 10)
+                pdf.cell(pdf.epw*0.5, 8, "Investimento Total (Capex)", border=1); pdf.cell(pdf.epw*0.5, 8, f"R$ {capex_total:,.2f}", border=1, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.cell(pdf.epw*0.5, 8, "VPL (Valor Presente Líquido)", border=1); pdf.cell(pdf.epw*0.5, 8, f"R$ {vpl:,.2f}", border=1, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.cell(pdf.epw*0.5, 8, "Payback Estimado", border=1); pdf.cell(pdf.epw*0.5, 8, str(payback_meses), border=1, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                
+                pdf.ln(10)
+                
+                # --- INSERÇÃO DOS GRÁFICOS (Correção de Integração) ---
+                
+                # 1. Gráfico de Fluxo de Caixa (da Aba 7)
+                try:
+                    img_caixa = fig_to_bytes(fig)
+                    if img_caixa:
+                        pdf.set_font(_fn, "B", 12)
+                        pdf.cell(pdf.epw, 8, "Fluxo de Caixa Acumulado", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+                        pdf.image(io.BytesIO(img_caixa), x=pdf.l_margin, w=pdf.epw)
+                        pdf.ln(5)
+                except Exception as e:
+                    st.warning(f"Aviso: Não foi possível renderizar o gráfico de fluxo de caixa no PDF. {e}")
+
+                # 2. Gráficos do Dashboard (da Aba 9 - Somente se houver produtos cadastrados)
+                if len(projeto.produtos) > 0:
+                    try:
+                        pdf.add_page()
+                        pdf.set_font(_fn, "B", 14)
+                        pdf.cell(pdf.epw, 10, "3. Análise Visual (Dashboard)", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                        pdf.ln(5)
+
+                        # Gráfico de Pizza (Custos)
+                        img_pizza = fig_to_bytes(fig_pizza)
+                        if img_pizza:
+                            pdf.set_font(_fn, "B", 12)
+                            pdf.cell(pdf.epw, 8, "Composição de Custos Mensais", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+                            # Tamanho reduzido e margem ajustada para centralizar a pizza
+                            pdf.image(io.BytesIO(img_pizza), x=35, w=140) 
+                            pdf.ln(10)
+                            
+                        # Gráfico de Barras (Receita)
+                        img_prod = fig_to_bytes(fig_prod)
+                        if img_prod:
+                            pdf.set_font(_fn, "B", 12)
+                            pdf.cell(pdf.epw, 8, "Receita e Margem por Produto", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+                            pdf.image(io.BytesIO(img_prod), x=pdf.l_margin, w=pdf.epw)
+                            
+                    except Exception as e:
+                        st.warning(f"Aviso: Não foi possível renderizar os dashboards no PDF. {e}")
+
+                # --- PÁGINA FINAL: PARECER TÉCNICO ---
+                pdf.add_page()
+                pdf.set_font(_fn, "B", 14)
+                num_sessao = "4." if len(projeto.produtos) > 0 else "3."
+                pdf.cell(pdf.epw, 10, f"{num_sessao} Parecer Técnico (Mentor IA)", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.ln(5)
+                pdf.set_font(_fn, "", 10)
+                
+                texto_final = parecer_ia_input if parecer_ia_input else "Nenhum parecer foi anexado ao relatório."
+                texto_limpo = texto_final.replace("•", "-").replace("\u2022", "-").replace("·", "-")
+                pdf.multi_cell(pdf.epw, 6, texto_limpo)
+
+                # Finalização e Download
+                pdf_output = pdf.output()
+                pdf_bytes = bytes(pdf_output) if not isinstance(pdf_output, bytes) else pdf_output
+                
+                st.success("✅ Dossiê compilado com sucesso e gráficos inseridos!")
+                st.download_button(
+                    label="📥 Baixar Relatório Executivo (PDF)",
+                    data=pdf_bytes,
+                    file_name=f"Dossie_{projeto.nome_empresa}.pdf",
+                    mime="application/pdf"
+                )
+                
         except Exception as e:
-            st.error(f"Ocorreu um erro ao gerar o PDF: {e}")
+            st.error(f"Erro crítico na geração do relatório: {e}")

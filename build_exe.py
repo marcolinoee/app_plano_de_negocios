@@ -7,32 +7,43 @@ st_path = os.path.dirname(streamlit.__file__)
 st_static_path = os.path.join(st_path, "static")
 
 # 2. Parâmetros de construção
-# FIX 4.1 — os.pathsep para compatibilidade Windows/Mac/Linux
+# FIX: os.pathsep para compatibilidade Windows/Mac/Linux
 params = [
     'lancador.py',
     '--noconfirm',
     '--onedir',
     '--windowed',
     '--name=Master_Management_5',
+    
     # Arquivos estáticos do Streamlit
     f'--add-data={st_static_path}{os.pathsep}streamlit/static',
+    
     # Arquivos da aplicação
     f'--add-data=app.py{os.pathsep}.',
     f'--add-data=banco_dados.py{os.pathsep}.',
+    
     # Assets (fonte UTF-8 para PDF)
     f'--add-data=assets{os.pathsep}assets',
+    
+    # --- ATUALIZAÇÃO DE DEPENDÊNCIAS (Tech Lead Fixes) ---
     # Hidden imports necessários
-    '--hidden-import=google.generativeai',
-    '--hidden-import=google.ai.generativelanguage',
-    '--hidden-import=google.protobuf',
+    '--hidden-import=google.genai',          # Nova IA do Google
     '--hidden-import=numpy_financial',
-    # Coleta total das bibliotecas
+    '--hidden-import=fpdf',                  # Motor do PDF
+    '--hidden-import=kaleido',               # Motor de gráficos Plotly
+    '--hidden-import=choreographer',         # Dependência do navegador invisível
+    
+    # Coleta total das bibliotecas (traz arquivos binários e submódulos essenciais)
     '--collect-all=streamlit',
-    '--collect-all=google.generativeai',
-    '--collect-all=google.ai.generativelanguage',
+    '--collect-all=google.genai',
     '--collect-all=plotly',
+    '--collect-all=kaleido',
+    '--collect-all=choreographer',
+    
+    # Metadados para evitar erros de "Version not found"
     '--copy-metadata=streamlit',
-    '--copy-metadata=google-generativeai',
+    '--copy-metadata=google-genai',
+    '--copy-metadata=kaleido',
 ]
 
 # Logo opcional — só inclui se o arquivo existir

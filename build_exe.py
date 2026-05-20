@@ -13,7 +13,7 @@ params = [
     '--noconfirm',
     '--onedir',
     '--windowed',
-    '--name=Master_Management_5',
+    '--name=Master_Management_TICs',         # ⬅️ ATUALIZADO: Novo nome do executável e da pasta dist
     
     # Arquivos estáticos do Streamlit
     f'--add-data={st_static_path}{os.pathsep}streamlit/static',
@@ -25,17 +25,20 @@ params = [
     # Assets (fonte UTF-8 para PDF)
     f'--add-data=assets{os.pathsep}assets',
     
-    # --- ATUALIZAÇÃO DE DEPENDÊNCIAS (Tech Lead Fixes) ---
+    # --- ATUALIZAÇÃO DE DEPENDÊNCIAS ---
     # Hidden imports necessários
-    '--hidden-import=google.genai',          # Nova IA do Google
+    '--hidden-import=google.genai',
+    '--hidden-import=google.auth',
     '--hidden-import=numpy_financial',
-    '--hidden-import=fpdf',                  # Motor do PDF
-    '--hidden-import=kaleido',               # Motor de gráficos Plotly
-    '--hidden-import=choreographer',         # Dependência do navegador invisível
+    '--hidden-import=pandas',                # ⬅️ ADICIONADO: Garantia para renderização das DREs
+    '--hidden-import=fpdf',
+    '--hidden-import=kaleido',
+    '--hidden-import=choreographer',
     
-    # Coleta total das bibliotecas (traz arquivos binários e submódulos essenciais)
+    # Coleta total das bibliotecas
     '--collect-all=streamlit',
     '--collect-all=google.genai',
+    '--collect-all=google.auth',
     '--collect-all=plotly',
     '--collect-all=kaleido',
     '--collect-all=choreographer',
@@ -56,7 +59,7 @@ else:
 params = [p for p in params if p]
 
 # 3. Execução
-print("💠 Iniciando a construção Master Management 5.0...")
+print("🚀 Iniciando a construção: Master Management - TICs...")
 PyInstaller.__main__.run(params)
-print("\n✅ Construção finalizada!")
-print("   Execute: dist/Master_Management_5/Master_Management_5")
+print("\n✅ Construção finalizada com sucesso!")
+print("   Execute o software em: dist/Master_Management_TICs/Master_Management_TICs.exe")

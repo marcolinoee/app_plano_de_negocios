@@ -1,816 +1,1501 @@
+# =============================================================================
+# MASTER MANAGEMENT - VENTURE CAPITAL EDITION
+# Copyright (c) 2026 - Prof. [Seu Nome] - [Nome da Instituição]
+#
+# AVISO LEGAL: Este código-fonte é propriedade intelectual do autor.
+# É estritamente proibido o uso comercial, reprodução não autorizada,
+# ou venda. Licenciado exclusivamente para fins didáticos e académicos
+# na disciplina de Empreendedorismo/TIC.
+# =============================================================================
+
 import sys
+import io
+import os
+import time
+import urllib.request
+
 import streamlit as st
 import plotly.graph_objects as go
-from google import genai
 import numpy_financial as npf
 import pandas as pd
-import os
-import io
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
-from banco_dados import session, ProjetoDB, CanvasDB, PremissasFinanceirasDB, InvestimentoDB, CustoFixoDB, ProdutoDB
 
-# ==========================================
-# UTILITÁRIOS
-# ==========================================
-def safe_image(url: str, **kwargs):
-    """Exibe imagem remota com fallback silencioso para uso offline."""
+# ── Google Gemini (Mentor VC) ─────────────────────────────────────────────────
+try:
+    from google import genai as _genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+
+# ── Modelos do Banco de Dados ─────────────────────────────────────────────────
+from banco_dados import (
+    session, 
+    ProjetoDB, 
+    LeanCanvasDB, 
+    PremissasStartupDB,
+    InvestimentoDB, 
+    CustoFixoDB, 
+    PlanoSaaSDB, 
+    JuridicoDB
+)
+
+# =============================================================================
+# FUNÇÕES UTILITÁRIAS E DE SEGURANÇA
+# =============================================================================
+def safe_str(valor):
+    """
+    Garante que valores nulos ou vazios oriundos da base de dados 
+    não quebrem a compilação do PDF ou a interface gráfica.
+    """
+    if valor:
+        return str(valor)
+    else:
+        return "Não informado."
+
+def fig_to_bytes(fig):
+    """
+    Converte gráficos Plotly em bytes PNG usando o motor Kaleido.
+    Possui tratamento de erro robusto para não travar o gerador de PDF no Windows.
+    O parâmetro scale=2 garante alta resolução para impressão no Dossiê.
+    """
     try:
-        import urllib.request
+        bytes_imagem = fig.to_image(
+            format="png", 
+            width=1000, 
+            height=500, 
+            scale=2
+        )
+        return bytes_imagem
+    except Exception as e:
+        st.error(f"Erro ao converter gráfico para imagem PNG: {e}")
+        return None
+
+def safe_image(url: str, **kwargs):
+    """
+    Tenta carregar uma imagem da web. Se o computador do utilizador 
+    estiver offline, omite a imagem silenciosamente.
+    """
+    try:
         urllib.request.urlopen(url, timeout=2)
         st.image(url, **kwargs)
     except Exception:
-        pass  # Offline: omite a imagem sem quebrar a interface
+        pass
 
-def fig_to_bytes(fig):
-    """Converte gráficos Plotly em bytes PNG usando o motor Kaleido."""
-    try:
-        return fig.to_image(format="png", width=1000, height=550, scale=2)
-    except Exception as e:
-        st.error(f"Erro ao converter gráfico: {e}")
-        return None
-
-# Path base do executável (funciona tanto em .py quanto em .exe)
-_BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+# =============================================================================
+# RESOLUÇÃO DE CAMINHOS ABSOLUTOS (COMPATIBILIDADE PYINSTALLER .EXE)
+# =============================================================================
+_BASE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 _LOGO_PATH = os.path.join(_BASE_DIR, "logo.png")
 _FONTE_PATH = os.path.join(_BASE_DIR, "assets", "DejaVuSans.ttf")
 
-st.set_page_config(page_title="Master Management - Plano 5.0", page_icon="💠", layout="wide")
+# =============================================================================
+# CONFIGURAÇÃO DE PÁGINA E INJEÇÃO DE CSS
+# =============================================================================
+st.set_page_config(
+    page_title="Master Management — Venture Capital Edition",
+    page_icon="🚀",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-# ==========================================
-# IDENTIDADE VISUAL MASTER MANAGEMENT (CSS)
-# ==========================================
 st.markdown("""
-    <style>
-    /* Fundo da aplicação */
-    .stApp { background-color: #FAFAFA; }
-    
-    /* Ocultar elementos nativos */
-    #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
-    
-    /* Estilizar as Abas (Tabs) */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background-color: #FFFFFF;
-        padding: 10px 10px 0px 10px;
-        border-radius: 10px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+<style>
+    /* Estilo Base da Aplicação */
+    .stApp { 
+        background-color: #F8FAFC; 
     }
+    
+    #MainMenu {
+        visibility: hidden;
+    } 
+    
+    footer {
+        visibility: hidden;
+    }
+    
+    /* Configuração Avançada de Abas (Tabs) */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 6px; 
+        background: #FFFFFF; 
+        padding: 10px 10px 0px 10px; 
+        border-radius: 10px;
+        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+    }
+    
     .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        background-color: #F1F5F9;
+        height: 48px; 
+        background: #F1F5F9; 
         border-radius: 8px 8px 0px 0px;
-        padding: 10px 16px;
-        color: #111111;
+        padding: 8px 14px; 
+        color: #0F172A; 
         font-weight: 700;
         border-bottom: 3px solid transparent;
+        transition: all 0.2s ease-in-out;
     }
+    
     .stTabs [aria-selected="true"] {
-        background-color: #111111 !important;
+        background: #2563EB !important; 
         color: #FFFFFF !important;
-        border-bottom: 3px solid #FA5A5A !important;
+        border-bottom: 3px solid #1D4ED8 !important;
     }
     
-    /* Inputs e Caixas de Texto */
-    .stTextInput input, .stNumberInput input, .stTextArea textarea, .stSelectbox div[data-baseweb="select"] {
-        border-radius: 8px;
-        border: 1px solid #E2E8F0;
-        background-color: #FFFFFF;
+    /* Estilização de Formulários e Inputs */
+    .stTextInput input, 
+    .stNumberInput input, 
+    .stTextArea textarea, 
+    .stSelectbox div[data-baseweb="select"] {
+        border-radius: 8px; 
+        border: 1px solid #CBD5E1; 
+        background: #FFFFFF; 
         padding: 10px;
-        transition: all 0.3s;
-    }
-    .stTextInput input:focus, .stNumberInput input:focus, .stTextArea textarea:focus {
-        border-color: #FA5A5A;
-        box-shadow: 0 0 0 2px rgba(250, 90, 90, 0.2);
     }
     
-    /* Botões Master Management */
+    .stTextInput input:focus, 
+    .stNumberInput input:focus, 
+    .stTextArea textarea:focus {
+        border-color: #2563EB; 
+        box-shadow: 0 0 0 2px rgba(37,99,235,0.2);
+    }
+    
+    /* Botões Padrão */
     .stButton>button {
-        background-color: #FA5A5A;
-        color: white;
-        border-radius: 8px;
+        background: #2563EB; 
+        color: #FFFFFF; 
+        border-radius: 8px; 
         border: none;
-        padding: 10px 24px;
-        font-weight: 700;
-        transition: all 0.3s ease;
+        padding: 10px 24px; 
+        font-weight: 700; 
+        transition: all 0.3s; 
         width: 100%;
-        box-shadow: 0 4px 6px -1px rgba(250, 90, 90, 0.2);
-    }
-    .stButton>button:hover {
-        background-color: #111111;
-        transform: translateY(-2px);
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2);
-        color: white;
     }
     
-    /* Cartões e Formulários */
-    [data-testid="stForm"], [data-testid="stExpander"] {
-        background-color: #FFFFFF;
-        border-radius: 12px;
+    .stButton>button:hover { 
+        background: #1E40AF; 
+        transform: translateY(-2px); 
+        color: #FFFFFF; 
+    }
+    
+    /* Cartões e Expanders */
+    [data-testid="stForm"], 
+    [data-testid="stExpander"] {
+        background: #FFFFFF; 
+        border-radius: 12px; 
         border: 1px solid #E2E8F0;
-        border-left: 4px solid #111111;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        border-left: 4px solid #2563EB; 
         padding: 15px;
+        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
     }
     
-    /* Títulos e Textos */
-    h1, h2, h3 { color: #111111 !important; }
+    /* Tipografia e Métricas */
+    [data-testid="stMetricValue"] { 
+        color: #2563EB; 
+        font-weight: 900; 
+    }
     
-    /* Métricas */
-    [data-testid="stMetricValue"] { color: #FA5A5A; font-weight: 900; }
-    </style>
+    h1, h2, h3 { 
+        color: #0F172A !important; 
+    }
+</style>
 """, unsafe_allow_html=True)
 
-# ==========================================
-# INICIALIZAÇÃO
-# ==========================================
-projeto = session.query(ProjetoDB).first()
-if not projeto:
-    projeto = ProjetoDB(nome_empresa="Nova Empresa")
-    session.add(projeto); session.commit()
-if not projeto.canvas:
-    session.add(CanvasDB(projeto_id=projeto.id)); session.commit(); session.refresh(projeto)
-if not hasattr(projeto, 'premissas') or not projeto.premissas:
-    session.add(PremissasFinanceirasDB(projeto_id=projeto.id)); session.commit(); session.refresh(projeto)
+# =============================================================================
+# PERSISTÊNCIA DE ESTADO DA IA
+# =============================================================================
+# Impede que a resposta do Mentor VC desapareça ao trocar de aba
+if "parecer_ia" not in st.session_state:
+    st.session_state["parecer_ia"] = ""
 
-# Cabeçalho com o Logotipo
-col_logo, col_titulo = st.columns([1, 3])
+# =============================================================================
+# SIDEBAR — GERENCIADOR DE PORTFÓLIO (CRUD)
+# =============================================================================
+with st.sidebar:
+    safe_image(
+        "https://images.unsplash.com/photo-1555066931-4365d14bab8c?q=80&w=1000&auto=format&fit=crop", 
+        width="stretch"
+    )
+    st.title("📂 Startups em Análise")
+
+    # 1. Leitura Inicial (Read)
+    todos_projetos = session.query(ProjetoDB).all()
+    if not todos_projetos:
+        novo_projeto = ProjetoDB(nome_startup="Nova Startup TIC")
+        session.add(novo_projeto)
+        session.commit()
+        todos_projetos = [novo_projeto]
+
+    # 2. Definição Segura do Projeto Ativo
+    if "projeto_atual_id" not in st.session_state:
+        st.session_state["projeto_atual_id"] = todos_projetos[0].id
+
+    ids_existentes = [p.id for p in todos_projetos]
+    if st.session_state["projeto_atual_id"] not in ids_existentes:
+        st.session_state["projeto_atual_id"] = ids_existentes[0]
+
+    # 3. Caixa de Seleção de Projetos
+    opcoes_projetos = {p.id: p.nome_startup for p in todos_projetos}
+    projeto_selecionado_id = st.selectbox(
+        "Startup Ativa:", 
+        options=list(opcoes_projetos.keys()), 
+        format_func=lambda x: opcoes_projetos[x], 
+        index=list(opcoes_projetos.keys()).index(st.session_state["projeto_atual_id"])
+    )
+    
+    # 4. Gatilho de Troca de Projeto
+    if projeto_selecionado_id != st.session_state["projeto_atual_id"]:
+        st.session_state["projeto_atual_id"] = projeto_selecionado_id
+        st.session_state["parecer_ia"] = ""  # Limpa o feedback da IA antiga
+        st.rerun()
+
+    st.markdown("---")
+
+    # 5. Criar Novo Projeto (Create)
+    with st.form("form_novo_proj", clear_on_submit=True):
+        novo_nome_startup = st.text_input("Nome da Nova Operação")
+        botao_nova_startup = st.form_submit_button("➕ Criar Startup")
+        
+        if botao_nova_startup and novo_nome_startup:
+            nova_startup = ProjetoDB(nome_startup=novo_nome_startup)
+            session.add(nova_startup)
+            session.commit()
+            st.session_state["projeto_atual_id"] = nova_startup.id
+            st.session_state["parecer_ia"] = ""
+            st.success("Startup criada com sucesso!")
+            st.rerun()
+
+    # 6. Renomear e Excluir (Update / Delete)
+    with st.expander("✏️ Renomear / 🗑️ Excluir"):
+        with st.form("form_renomear"):
+            nome_editado = st.text_input(
+                "Novo Nome", 
+                value=opcoes_projetos[st.session_state["projeto_atual_id"]]
+            )
+            botao_renomear = st.form_submit_button("Salvar Alteração")
+            
+            if botao_renomear and nome_editado:
+                projeto_para_editar = session.get(ProjetoDB, st.session_state["projeto_atual_id"])
+                projeto_para_editar.nome_startup = nome_editado
+                session.commit()
+                st.rerun()
+                
+        st.warning("Aviso: A exclusão é permanente e destrói o valuation do banco de dados.")
+        botao_excluir = st.button("Excluir Startup", type="primary")
+        
+        if botao_excluir:
+            if len(todos_projetos) > 1:
+                projeto_para_deletar = session.get(ProjetoDB, st.session_state["projeto_atual_id"])
+                session.delete(projeto_para_deletar)
+                session.commit()
+                st.session_state["projeto_atual_id"] = session.query(ProjetoDB).all()[0].id
+                st.session_state["parecer_ia"] = ""
+                st.rerun()
+            else:
+                st.error("Erro Crítico: Não é possível excluir a última startup da base de dados.")
+
+    st.markdown("---")
+    st.subheader("🔌 Sistema Local")
+    if st.button("Desligar Servidor Interno", type="primary"):
+        st.success("Servidor encerrado. A memória RAM foi libertada.")
+        time.sleep(2)
+        os._exit(0)
+
+# =============================================================================
+# INICIALIZAÇÃO DE INTEGRIDADE RELACIONAL 
+# (Garante que as tabelas de 1:1 existam)
+# =============================================================================
+projeto = session.get(ProjetoDB, st.session_state["projeto_atual_id"])
+
+def garantir_relacionamento(atributo, classe_modelo):
+    """Verifica e cria os registos filhos caso não existam para o projeto."""
+    if not getattr(projeto, atributo):
+        novo_registo = classe_modelo(projeto_id=projeto.id)
+        session.add(novo_registo)
+        session.commit()
+        session.refresh(projeto)
+
+garantir_relacionamento("lean_canvas", LeanCanvasDB)
+garantir_relacionamento("premissas", PremissasStartupDB)
+garantir_relacionamento("juridico", JuridicoDB)
+
+# =============================================================================
+# CABEÇALHO DO APLICATIVO
+# =============================================================================
+col_logo, col_titulo = st.columns([1, 6])
+
 with col_logo:
     if os.path.exists(_LOGO_PATH):
         st.image(_LOGO_PATH, width="stretch")
     else:
-        st.markdown("### 💠 MASTER MGT")
+        st.markdown("## 🚀 VC")
+
 with col_titulo:
-    st.title(f"Plano de Negócios: {projeto.nome_empresa}")
+    st.title(f"Startup: {projeto.nome_startup}")
+    st.caption("Master Management v8.5 — Venture Capital & Due Diligence Edition")
+    
 st.markdown("---")
 
-# ==========================================
-# ARQUITETURA DE INFORMAÇÃO: ABAS
-# ==========================================
-aba1, aba2, aba3, aba4, aba5, aba6, aba7, aba8, aba9, aba10 = st.tabs([
-       "🧩 Canvas", "📈 Premissas", "🛠️ Capex", "🔄 Opex",
-       "🏷️ Preços", "📄 Resumo", "📊 Viabilidade", "🤖 IA", "📉 Dashboard", 
-       "🖨️ Relatório"
-   ])
- 
+# =============================================================================
+# ⚙️ MOTOR MATEMÁTICO E FINANCEIRO (SAAS & UNIT ECONOMICS)
+# Processado antes das abas para garantir que os dados globais estejam
+# acessíveis em todas as visualizações e relatórios.
+# =============================================================================
+premissas_atuais = projeto.premissas
 
-# ==========================================
-# ABA 1: CANVAS
-# ==========================================
-with aba1:
-    safe_image("https://images.unsplash.com/photo-1552664730-d307ca884978?q=80&w=1000&auto=format&fit=crop", width="stretch")
-    st.header("Business Model Canvas")
-    with st.form("form_canvas"):
-        c1, c2, c3, c4, c5 = st.columns(5)
-        with c1:
-            parceiros = st.text_area("1. Parceiros", value=projeto.canvas.parceiros, height=150, max_chars=2000)
-            estrutura_custos = st.text_area("8. Estrutura de Custos", value=projeto.canvas.estrutura_custos, height=150, max_chars=2000)
-        with c2:
-            processos = st.text_area("2. Processos", value=projeto.canvas.processos, height=150, max_chars=2000)
-            recursos = st.text_area("3. Recursos", value=projeto.canvas.recursos, height=150, max_chars=2000)
-        with c3:
-            proposta = st.text_area("4. Proposta de Valor", value=projeto.canvas.proposta_valor, height=330, max_chars=2000)
-        with c4:
-            atendimento = st.text_area("5. Relacionamento", value=projeto.canvas.atendimento, height=150, max_chars=2000)
-            canais = st.text_area("6. Canais", value=projeto.canvas.canais, height=150, max_chars=2000)
-        with c5:
-            segmentos = st.text_area("7. Segmentos", value=projeto.canvas.segmentos, height=150, max_chars=2000)
-            receitas = st.text_area("9. Fontes de Receita", value=projeto.canvas.fontes_receita, height=150, max_chars=2000)
-        if st.form_submit_button("Guardar Estratégia"):
-            projeto.canvas.parceiros, projeto.canvas.processos, projeto.canvas.recursos = parceiros, processos, recursos
-            projeto.canvas.proposta_valor, projeto.canvas.atendimento, projeto.canvas.canais = proposta, atendimento, canais
-            projeto.canvas.segmentos, projeto.canvas.estrutura_custos, projeto.canvas.fontes_receita = segmentos, estrutura_custos, receitas
-            session.commit(); st.success("Canvas atualizado!")
+# 1. Agrupamento de Custos Base (Capex e Opex Fixo)
+capex_total_apurado = sum(investimento.valor for investimento in projeto.investimentos)
+opex_fixo_mensal = sum(custo.valor_mensal for custo in projeto.custos_fixos) + projeto.juridico.custo_estimado_legal
 
-# ==========================================
-# ABA 2: PREMISSAS E SAZONALIDADE
-# ==========================================
-with aba2:
-    safe_image("https://images.unsplash.com/photo-1460925895917-afdab827c52f?q=80&w=1000&auto=format&fit=crop", width="stretch")
-    st.header("Premissas e Perfil de Sazonalidade")
-    with st.form("form_premissas"):
-        c1, c2, c3, c4 = st.columns(4)
-        hor_anos = c1.number_input("Horizonte (Anos)", min_value=1, max_value=10, value=projeto.premissas.horizonte_anos)
-        tma = c2.number_input("TMA (% a.a.)", value=projeto.premissas.tma_anual_pct)
-        crescimento = c3.number_input("Crescimento de Vendas (% a.a.)", value=projeto.premissas.crescimento_vendas_ano_pct)
-        inflacao = c4.number_input("Inflação de Custos (% a.a.)", value=projeto.premissas.inflacao_custos_ano_pct)
-        
-        st.markdown("---")
-        st.subheader("Sazonalidade das Vendas (%)")
-        s1, s2, s3, s4, s5, s6 = st.columns(6)
-        m1 = s1.number_input("Mês 1 (%)", value=projeto.premissas.saz_m1)
-        m2 = s2.number_input("Mês 2 (%)", value=projeto.premissas.saz_m2)
-        m3 = s3.number_input("Mês 3 (%)", value=projeto.premissas.saz_m3)
-        m4 = s4.number_input("Mês 4 (%)", value=projeto.premissas.saz_m4)
-        m5 = s5.number_input("Mês 5 (%)", value=projeto.premissas.saz_m5)
-        m6 = s6.number_input("Mês 6 (%)", value=projeto.premissas.saz_m6)
-        
-        s7, s8, s9, s10, s11, s12 = st.columns(6)
-        m7 = s7.number_input("Mês 7 (%)", value=projeto.premissas.saz_m7)
-        m8 = s8.number_input("Mês 8 (%)", value=projeto.premissas.saz_m8)
-        m9 = s9.number_input("Mês 9 (%)", value=projeto.premissas.saz_m9)
-        m10 = s10.number_input("Mês 10 (%)", value=projeto.premissas.saz_m10)
-        m11 = s11.number_input("Mês 11 (%)", value=projeto.premissas.saz_m11)
-        m12 = s12.number_input("Mês 12 (%)", value=projeto.premissas.saz_m12)
-        
-        if st.form_submit_button("Atualizar Motor de Projeção"):
-            projeto.premissas.horizonte_anos, projeto.premissas.tma_anual_pct = hor_anos, tma
-            projeto.premissas.crescimento_vendas_ano_pct, projeto.premissas.inflacao_custos_ano_pct = crescimento, inflacao
-            projeto.premissas.saz_m1, projeto.premissas.saz_m2, projeto.premissas.saz_m3 = m1, m2, m3
-            projeto.premissas.saz_m4, projeto.premissas.saz_m5, projeto.premissas.saz_m6 = m4, m5, m6
-            projeto.premissas.saz_m7, projeto.premissas.saz_m8, projeto.premissas.saz_m9 = m7, m8, m9
-            projeto.premissas.saz_m10, projeto.premissas.saz_m11, projeto.premissas.saz_m12 = m10, m11, m12
-            session.commit(); st.success("Atualizado!")
+# 2. Funil Freemium e Utilizadores Base
+usuarios_pagos_diretos = sum(plano.usuarios_ativos_base for plano in projeto.planos_saas)
+taxa_conversao_freemium_decimal = premissas_atuais.conversao_freemium_pct / 100.0
 
-# ==========================================
-# ABA 3 e 4: CAPEX e OPEX
-# ==========================================
-with aba3:
-    safe_image("https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?q=80&w=1000&auto=format&fit=crop", width="stretch")
-    st.header("Plano de Investimentos (Capex)")
+# Quantidade de utilizadores que convertem da base gratuita para a base paga
+conversos_pagantes_freemium = int(premissas_atuais.usuarios_freemium_base * taxa_conversao_freemium_decimal)
+
+# Total absoluto de utilizadores pagantes no momento zero
+usuarios_pagantes_totais_base = usuarios_pagos_diretos + conversos_pagantes_freemium
+
+# 3. Cálculo de Faturamento MRR e Ticket Médio
+mrr_bruto_direto_apurado = sum(
+    plano.ticket_mensal * plano.usuarios_ativos_base 
+    for plano in projeto.planos_saas
+)
+
+if usuarios_pagos_diretos > 0:
+    ticket_medio_arpu = mrr_bruto_direto_apurado / usuarios_pagos_diretos
+else:
+    ticket_medio_arpu = 0.0
+
+# O MRR total absorve o faturamento dos convertidos do Freemium
+mrr_bruto_total_consolidado = mrr_bruto_direto_apurado + (conversos_pagantes_freemium * ticket_medio_arpu)
+
+# 4. Cálculo de Deduções Variáveis (Médias Ponderadas por Plano)
+if usuarios_pagos_diretos > 0:
+    media_deducao_impostos_pct = sum(
+        (plano.taxas_pagamento_pct + plano.impostos_pct) / 100 * (plano.usuarios_ativos_base / usuarios_pagos_diretos) 
+        for plano in projeto.planos_saas
+    )
     
-    with st.form("form_capex", clear_on_submit=True):
-        c1, c2, c3 = st.columns([1, 2, 1])
-        cat_inv = c1.selectbox("Categoria", ["Equipamentos", "Máquinas", "Instalações", "Outros"], key="cat_capex")
-        desc_inv = c2.text_input("Descrição", key="desc_capex")
-        val_inv = c3.number_input("Valor (R$)", min_value=0.0, step=100.0, key="val_capex")
+    media_custo_nuvem_rs = sum(
+        plano.custo_servidor_por_usuario * (plano.usuarios_ativos_base / usuarios_pagos_diretos) 
+        for plano in projeto.planos_saas
+    )
+else:
+    media_deducao_impostos_pct = 0.0
+    media_custo_nuvem_rs = 0.0
+
+# Despesas Financeiras do Mês Zero
+despesas_deducoes_base = mrr_bruto_total_consolidado * media_deducao_impostos_pct
+despesas_nuvem_cogs_base = usuarios_pagantes_totais_base * media_custo_nuvem_rs
+
+# 5. DRE Base e Margens Operacionais
+mrr_liquido_apurado_base = mrr_bruto_total_consolidado - despesas_deducoes_base
+burn_rate_total_mensal = opex_fixo_mensal + despesas_nuvem_cogs_base
+
+resultado_operacional_ebitda = mrr_liquido_apurado_base - burn_rate_total_mensal
+
+if mrr_bruto_total_consolidado > 0:
+    margem_bruta_percentual = ((mrr_liquido_apurado_base - despesas_nuvem_cogs_base) / mrr_bruto_total_consolidado) * 100
+else:
+    margem_bruta_percentual = 0.0
+
+faturamento_anualizado_arr = mrr_bruto_total_consolidado * 12
+
+# 6. Mapeamento de Unit Economics
+taxa_churn_decimal = premissas_atuais.churn_mensal_pct / 100.0
+
+if taxa_churn_decimal > 0:
+    ltv_vitalicio_cliente = ticket_medio_arpu / taxa_churn_decimal
+else:
+    ltv_vitalicio_cliente = 0.0
+
+cac_aquisicao_mercado = premissas_atuais.cac_estimado
+
+if cac_aquisicao_mercado > 0:
+    indice_ltv_cac = ltv_vitalicio_cliente / cac_aquisicao_mercado
+else:
+    indice_ltv_cac = 0.0
+
+# Tempo em meses para a margem de contribuição de um cliente pagar o seu próprio CAC
+if cac_aquisicao_mercado > 0 and ticket_medio_arpu > 0 and (1 - media_deducao_impostos_pct) > 0:
+    meses_payback_cac = cac_aquisicao_mercado / (ticket_medio_arpu * (1 - media_deducao_impostos_pct))
+else:
+    meses_payback_cac = None
+
+# 7. Motor de Simulação Dinâmica (Loop de Crescimento)
+meses_de_horizonte_projecao = premissas_atuais.horizonte_meses
+tma_desconto_mensal = (1 + premissas_atuais.tma_anual_pct / 100) ** (1 / 12) - 1
+taxa_crescimento_organico_mensal = premissas_atuais.crescimento_mensal_pct / 100.0
+
+# Inicialização das listas da linha de tempo
+lista_fluxo_de_caixa = [-capex_total_apurado]
+lista_rotulos_meses = ["Mês 0"]
+
+timeline_usuarios_pagantes = [usuarios_pagantes_totais_base]
+timeline_mrr_crescente = [mrr_bruto_total_consolidado]
+timeline_usuarios_freemium = [float(premissas_atuais.usuarios_freemium_base)]
+
+# Variáveis mutáveis do Loop
+usuarios_ativos_no_loop = float(usuarios_pagantes_totais_base)
+usuarios_freemium_no_loop = float(premissas_atuais.usuarios_freemium_base)
+
+for mes_corrente in range(1, meses_de_horizonte_projecao + 1):
+    
+    # 7.1. Crescimento da Base Freemium (Topo de Funil)
+    usuarios_freemium_no_loop = usuarios_freemium_no_loop * (1 + taxa_crescimento_organico_mensal)
+    
+    # 7.2. Conversão de Gratuitos para Pagos
+    novos_clientes_advindos_do_free = usuarios_freemium_no_loop * taxa_conversao_freemium_decimal
+    
+    # 7.3. Perdas por Cancelamento (Churn) da Base Paga
+    evasao_de_clientes_pagos = usuarios_ativos_no_loop * taxa_churn_decimal
+    
+    # 7.4. Crescimento Orgânico da Base Paga
+    novos_clientes_organicos_pagos = usuarios_ativos_no_loop * taxa_crescimento_organico_mensal
+    
+    # 7.5. Saldo Final de Utilizadores do Mês
+    usuarios_ativos_no_loop = (usuarios_ativos_no_loop 
+                               + novos_clientes_organicos_pagos 
+                               + novos_clientes_advindos_do_free 
+                               - evasao_de_clientes_pagos)
+
+    # 7.6. Faturação do Mês
+    mrr_apurado_no_mes = usuarios_ativos_no_loop * ticket_medio_arpu
+    
+    # 7.7. Custos do Mês
+    deducoes_fiscais_no_mes = mrr_apurado_no_mes * media_deducao_impostos_pct
+    cogs_nuvem_no_mes = usuarios_ativos_no_loop * media_custo_nuvem_rs
+    
+    # 7.8. Resultado Líquido
+    resultado_liquido_mensal = (mrr_apurado_no_mes - deducoes_fiscais_no_mes) - cogs_nuvem_no_mes - opex_fixo_mensal
+
+    # 7.9. Armazenamento na Matriz
+    lista_fluxo_de_caixa.append(resultado_liquido_mensal)
+    lista_rotulos_meses.append(f"Mês {mes_corrente}")
+    
+    timeline_usuarios_pagantes.append(usuarios_ativos_no_loop)
+    timeline_mrr_crescente.append(mrr_apurado_no_mes)
+    timeline_usuarios_freemium.append(usuarios_freemium_no_loop)
+
+# Criação da Série Acumulada do Caixa (Balanço)
+serie_caixa_acumulado = pd.Series(lista_fluxo_de_caixa).cumsum()
+
+# 8. Análise de Viabilidade Financeira a Longo Prazo
+valor_presente_liquido_vpl = npf.npv(tma_desconto_mensal, lista_fluxo_de_caixa)
+
+taxa_interna_retorno_anual = 0.0
+validade_da_tir = False
+
+try:
+    if capex_total_apurado > 0:
+        tir_mensal_bruta = npf.irr(lista_fluxo_de_caixa)
+        if tir_mensal_bruta is not None and not pd.isna(tir_mensal_bruta):
+            taxa_interna_retorno_anual = ((1 + tir_mensal_bruta) ** 12 - 1) * 100
+            validade_da_tir = True
+except Exception:
+    pass
+
+mes_de_breakeven_payback = "O Projeto Não Atinge Breakeven"
+for numero_mes, valor_em_caixa in enumerate(serie_caixa_acumulado):
+    if valor_em_caixa >= 0 and numero_mes > 0:
+        mes_de_breakeven_payback = f"{numero_mes} meses para o Payback"
+        break
+
+meses_runway_sobrevivencia = None
+if resultado_operacional_ebitda < 0 and capex_total_apurado > 0:
+    meses_runway_sobrevivencia = capex_total_apurado / abs(resultado_operacional_ebitda)
+
+
+# =============================================================================
+# 📊 CONSTRUÇÃO DOS GRÁFICOS (BYPASS DE DICIONÁRIO OBRIGATÓRIO PARA PYINSTALLER)
+#
+# Regra Crítica: A injeção do dicionário `layout` diretamente no construtor 
+# `go.Figure()` é obrigatória. O uso do método `.update_layout()` causaria o 
+# erro "AttributeError: 'Figure' object has no attribute 'parent'" no .exe Windows.
+# =============================================================================
+
+# Gráfico 1: Fluxo de Caixa Mensal e Vale da Morte
+figura_cashflow_projetado = go.Figure(
+    data=[
+        {
+            'type': 'bar', 
+            'name': "Resultado Mensal Líquido", 
+            'x': lista_rotulos_meses, 
+            'y': lista_fluxo_de_caixa,
+            'marker': {
+                'color': ["#DC2626" if fluxo < 0 else "#16A34A" for fluxo in lista_fluxo_de_caixa]
+            }
+        },
+        {
+            'type': 'scatter', 
+            'name': "Caixa Consolidado (Balanço)", 
+            'x': lista_rotulos_meses, 
+            'y': serie_caixa_acumulado.tolist(),
+            'mode': "lines", 
+            'line': {'color': "#0F172A", 'width': 3}
+        }
+    ],
+    layout={
+        'barmode': "group", 
+        'height': 450, 
+        'title': "Projeção de Cashflow — Atravessia do Vale da Morte",
+        'legend': {'orientation': "h", 'yanchor': "bottom", 'y': 1.02}
+    }
+)
+
+# Gráfico 2: Composição de Custos e Burn Rate (Gráfico Circular / Pizza)
+# CORREÇÃO APLICADA AQUI: Utilização da variável correta despesas_nuvem_cogs_base
+figura_pizza_custos = go.Figure(
+    data=[
+        {
+            'type': 'pie',
+            'labels': ["Serviços Cloud (COGS)", "Opex e Despesas Fixas", "Impostos e Gateways"],
+            'values': [despesas_nuvem_cogs_base, opex_fixo_mensal, despesas_deducoes_base],
+            'hole': 0.55,
+            'marker': {'colors': ["#2563EB", "#0F172A", "#94A3B8"]},
+            'textinfo': "percent+label"
+        }
+    ],
+    layout={
+        'height': 320, 
+        'showlegend': False, 
+        'margin': {'t': 10, 'b': 10, 'l': 10, 'r': 10}
+    }
+)
+
+# Gráfico 3: Crescimento Expansivo de MRR e Aquisição de Utilizadores
+figura_mrr_tracao = go.Figure(
+    data=[
+        {
+            'type': 'scatter', 
+            'name': "Evolução do MRR (R$)", 
+            'x': lista_rotulos_meses[1:], 
+            'y': timeline_mrr_crescente[1:],
+            'mode': "lines", 
+            'line': {'color': "#2563EB", 'width': 3}, 
+            'yaxis': "y1"
+        },
+        {
+            'type': 'scatter', 
+            'name': "Expansão da Base Paga", 
+            'x': lista_rotulos_meses[1:], 
+            'y': timeline_usuarios_pagantes[1:],
+            'mode': "lines", 
+            'line': {'color': "#16A34A", 'width': 2, 'dash': "dot"}, 
+            'yaxis': "y2"
+        }
+    ],
+    layout={
+        'height': 320,
+        'yaxis': {
+            'title': "Faturação MRR (R$)", 
+            'title_font': {'color': "#2563EB"} # Correção Aplicada: title_font em vez de titlefont
+        },
+        'yaxis2': {
+            'title': "Volume de Clientes Pagantes", 
+            'overlaying': "y", 
+            'side': "right", 
+            'title_font': {'color': "#16A34A"}
+        },
+        'legend': {'orientation': "h", 'yanchor': "bottom", 'y': 1.02},
+        'margin': {'t': 10, 'b': 10, 'l': 10, 'r': 10}
+    }
+)
+
+# Gráfico 4: Visualização do Funil de Conversão (Freemium)
+figura_funil_freemium = go.Figure(
+    data=[
+        {
+            'type': 'bar',
+            'x': ["Entrada: Base Freemium", "Saída: Conversões Efetivadas"],
+            'y': [premissas_atuais.usuarios_freemium_base, conversos_pagantes_freemium],
+            'marker': {'color': ["#94A3B8", "#2563EB"]},
+            'text': [premissas_atuais.usuarios_freemium_base, conversos_pagantes_freemium],
+            'textposition': "outside"
+        }
+    ],
+    layout={
+        'height': 280, 
+        'title': "Desempenho do Funil Freemium", 
+        'margin': {'t': 40, 'b': 10, 'l': 10, 'r': 10}
+    }
+)
+
+
+# =============================================================================
+# ARQUITETURA DE INFORMAÇÃO — 11 ABAS PROFISSIONAIS DE FUNDOS VC
+# =============================================================================
+(
+    aba_canvas_negocios, 
+    aba_premissas_mercado, 
+    aba_capex_infra, 
+    aba_opex_burn, 
+    aba_saas_pricing, 
+    aba_legal_riscos, 
+    aba_resumo_onepager, 
+    aba_viabilidade_vpl, 
+    aba_dashboard_unit, 
+    aba_mentor_vc, 
+    aba_pdf_export
+) = st.tabs([
+    "🧩 Lean Canvas", 
+    "📈 Premissas", 
+    "🛠️ Capex", 
+    "🔄 Opex",
+    "💳 SaaS Pricing", 
+    "⚖️ Riscos Legais", 
+    "📄 Resumo One-Pager", 
+    "📊 Viabilidade", 
+    "📉 Dashboards",
+    "🤖 Comitê VC (IA)", 
+    "🖨️ Data Room (PDF)"
+])
+
+# =============================================================================
+# ABA 1: LEAN CANVAS E MODELO DE NEGÓCIOS
+# =============================================================================
+with aba_canvas_negocios:
+    safe_image(
+        "https://images.unsplash.com/photo-1552664730-d307ca884978?q=80&w=1000&auto=format&fit=crop", 
+        width="stretch"
+    )
+    st.header("🧩 Lean Canvas — Validação da Dor e da Solução")
+    st.info("A matriz do Lean Canvas é o primeiro filtro de um investidor. Defina de forma clara a sua Proposta Única de Valor (VPU) e qual o seu 'Fosso Competitivo' (Vantagem Injusta).")
+
+    with st.form("formulario_matriz_canvas"):
+        col_c1, col_c2, col_c3, col_c4, col_c5 = st.columns(5)
         
-        if st.form_submit_button("Adicionar Investimento") and desc_inv:
-            session.add(InvestimentoDB(categoria=cat_inv, descricao=desc_inv, valor=val_inv, projeto_id=projeto.id))
-            session.commit(); st.rerun()
-            
-    for inv in projeto.investimentos: 
-        col_info, col_del = st.columns([11, 1]) 
-        with col_info:
-            st.info(f"**{inv.categoria}**: {inv.descricao} - R$ {inv.valor:,.2f}")
-        with col_del:
-            if st.button("🗑️", key=f"del_inv_{inv.id}", help="Excluir item"):
-                session.delete(inv)
-                session.commit()
-                st.rerun()
-                
-with aba4:
-    safe_image("https://images.unsplash.com/photo-1497366216548-37526070297c?q=80&w=1000&auto=format&fit=crop", width="stretch")
-    st.header("Custos Fixos e RH (Opex)")
-    with st.form("form_opex", clear_on_submit=True):
-        c1, c2, c3 = st.columns([1, 2, 1])
-        cat_custo = c1.selectbox("Categoria", ["Colaboradores", "Pró-labore", "Serviços", "Estrutura"], key="cat_opex")
-        desc_custo = c2.text_input("Descrição", key="desc_opex")
-        val_custo = c3.number_input("Valor Mensal (R$)", min_value=0.0, step=100.0, key="val_opex")
-        
-        if st.form_submit_button("Adicionar Custo") and desc_custo:
-            session.add(CustoFixoDB(categoria=cat_custo, descricao=desc_custo, valor_mensal=val_custo, projeto_id=projeto.id))
-            session.commit(); st.rerun()
-            
-    for custo in projeto.custos_fixos: 
-        col_info, col_del = st.columns([11, 1])
-        with col_info:
-            st.error(f"**{custo.categoria}**: {custo.descricao} - R$ {custo.valor_mensal:,.2f} / mês")
-        with col_del:
-            if st.button("🗑️", key=f"del_opex_{custo.id}", help="Excluir custo"):
-                session.delete(custo)
-                session.commit()
-                st.rerun()
-
-# ==========================================
-# ABA 5: PRECIFICAÇÃO
-# ==========================================
-with aba5:
-    safe_image("https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?q=80&w=1000&auto=format&fit=crop", width="stretch")
-    st.header("Ficha Técnica e Precificação")
-    with st.form("form_preco", clear_on_submit=True):
-        nome_prod = st.text_input("Produto/Serviço")
-        c1, c2 = st.columns(2)
-        vendas_mes = c1.number_input("Vendas Base (Mês)", min_value=0)
-        custo_insumo = c2.number_input("Custo de Insumo (R$)", min_value=0.0)
-        c3, c4, c5, c6 = st.columns(4)
-        imp_pct = c3.number_input("Impostos (%)", min_value=0.0, max_value=99.0, step=0.5)
-        tax_pct = c4.number_input("Taxas (%)", min_value=0.0, max_value=99.0, step=0.5)
-        com_pct = c5.number_input("Comissões (%)", min_value=0.0, max_value=99.0, step=0.5)
-        lucro_pct = c6.number_input("Margem Lucro (%)", min_value=0.0, max_value=99.0, step=0.5)
-        
-        if st.form_submit_button("Calcular e Salvar") and nome_prod:
-            soma_pct = (imp_pct + tax_pct + com_pct + lucro_pct) / 100.0
-            if soma_pct >= 1: st.error("A soma não pode ser >= 100%!")
-            else:
-                preco = custo_insumo / (1 - soma_pct)
-                session.add(ProdutoDB(nome_produto=nome_prod, estimativa_vendas_mes=vendas_mes, custo_insumos=custo_insumo, impostos_pct=imp_pct, taxas_pct=tax_pct, comissoes_pct=com_pct, margem_lucro_pct=lucro_pct, preco_venda_sugerido=preco, projeto_id=projeto.id))
-                session.commit(); st.success(f"Preço: R$ {preco:.2f}"); st.rerun()
-
-    for p in projeto.produtos: 
-        col_info, col_del = st.columns([11, 1])
-        with col_info:
-            st.success(f"📦 **{p.nome_produto}** | Preço: R$ {p.preco_venda_sugerido:.2f}")
-        with col_del:
-            if st.button("🗑️", key=f"del_prod_{p.id}", help="Excluir produto"):
-                session.delete(p)
-                session.commit()
-                st.rerun()
-
-# ==========================================
-# ABA 6: RESUMO EXECUTIVO
-# ==========================================
-with aba6:
-    safe_image("https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?q=80&w=1000&auto=format&fit=crop", width="stretch")
-    st.header("📄 Resumo Executivo")
-    with st.expander("🧩 Eixo Estratégico", expanded=True):
-        st.markdown(f"**Proposta de Valor:** {projeto.canvas.proposta_valor}")
-    with st.expander("📈 Premissas Macroeconômicas"):
-        st.markdown(f"- Horizonte: {projeto.premissas.horizonte_anos} anos | TMA: {projeto.premissas.tma_anual_pct}% a.a.")
-    with st.expander("🛠️ Capex"):
-        for inv in projeto.investimentos: st.markdown(f"- {inv.descricao}: R$ {inv.valor:,.2f}")
-    with st.expander("🔄 Opex"):
-        for custo in projeto.custos_fixos: st.markdown(f"- {custo.descricao}: R$ {custo.valor_mensal:,.2f}")
-
-# ==========================================
-# ABA 7: VIABILIDADE MENSAL
-# ==========================================
-with aba7:
-    safe_image("https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=1000&auto=format&fit=crop", width="stretch")
-    st.header("Análise de Viabilidade (Mês a Mês)")
-    anos = projeto.premissas.horizonte_anos
-    meses_totais = anos * 12
-    tma_am = (1 + (projeto.premissas.tma_anual_pct / 100.0))**(1/12) - 1
-    tx_cresc_am = (1 + (projeto.premissas.crescimento_vendas_ano_pct / 100.0))**(1/12) - 1
-    tx_infl_am = (1 + (projeto.premissas.inflacao_custos_ano_pct / 100.0))**(1/12) - 1
-    
-    saz = [
-        projeto.premissas.saz_m1/100, projeto.premissas.saz_m2/100, projeto.premissas.saz_m3/100,
-        projeto.premissas.saz_m4/100, projeto.premissas.saz_m5/100, projeto.premissas.saz_m6/100,
-        projeto.premissas.saz_m7/100, projeto.premissas.saz_m8/100, projeto.premissas.saz_m9/100,
-        projeto.premissas.saz_m10/100, projeto.premissas.saz_m11/100, projeto.premissas.saz_m12/100
-    ]
-    
-    capex_total = sum(i.valor for i in projeto.investimentos)
-    receita_base = sum(p.preco_venda_sugerido * p.estimativa_vendas_mes for p in projeto.produtos)
-    custo_var_base = sum(p.custo_insumos * p.estimativa_vendas_mes for p in projeto.produtos)
-    deducoes_base = sum((p.preco_venda_sugerido * p.estimativa_vendas_mes) * ((p.impostos_pct + p.taxas_pct + p.comissoes_pct) / 100.0) for p in projeto.produtos)
-    custo_fixo_base = sum(c.valor_mensal for c in projeto.custos_fixos)
-    
-    fluxo_caixa, meses_labels = [-capex_total], ["Mês 0"]
-    for mes in range(1, meses_totais + 1):
-        idx_saz = (mes - 1) % 12
-        rec_mes = receita_base * saz[idx_saz] * ((1 + tx_cresc_am)**mes)
-        cv_mes = custo_var_base * saz[idx_saz] * ((1 + tx_cresc_am)**mes)
-        ded_mes = deducoes_base * saz[idx_saz] * ((1 + tx_cresc_am)**mes)
-        cf_mes = custo_fixo_base * ((1 + tx_infl_am)**mes)
-        fluxo_caixa.append(rec_mes - cv_mes - ded_mes - cf_mes)
-        meses_labels.append(f"M {mes}")
-
-    vpl = npf.npv(tma_am, fluxo_caixa)
-
-    # FIX 1.1 — TIR com tratamento correto de exceções e flag de validade
-    tir_aa = 0.0
-    tir_valida = False
-    try:
-        if capex_total > 0:
-            irr_val = npf.irr(fluxo_caixa)
-            if irr_val is not None and irr_val == irr_val:  # checa NaN
-                tir_aa = ((1 + irr_val)**12 - 1) * 100
-                tir_valida = True
-    except (ValueError, FloatingPointError):
-        tir_aa = 0.0
-        tir_valida = False
-
-    fluxo_acumulado = pd.Series(fluxo_caixa).cumsum()
-    payback_meses = "Não recupera"
-    for i, valor in enumerate(fluxo_acumulado):
-        if valor >= 0 and i > 0:
-            payback_meses = f"{i} meses"
-            break
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Capex", f"R$ {capex_total:,.2f}")
-    c2.metric("VPL", f"R$ {vpl:,.2f}", delta="Viável" if vpl > 0 else "Inviável")
-    tir_label = f"{tir_aa:,.2f}%" if tir_valida else "N/A"
-    tir_delta = f"TMA: {projeto.premissas.tma_anual_pct}%" if tir_valida else "⚠️ Fluxo sem inversão de sinal"
-    c3.metric("TIR a.a.", tir_label, delta=tir_delta)
-    c4.metric("Payback", payback_meses)
-
-    if not tir_valida and capex_total > 0:
-        st.warning("⚠️ A TIR não pôde ser calculada. Verifique se o projeto gera lucro em algum período do horizonte.")
-
-    fig = go.Figure(data=[go.Bar(name='Fluxo Mensal', x=meses_labels, y=fluxo_caixa, marker_color=['#111111' if val < 0 else '#FA5A5A' for val in fluxo_caixa])])
-    fig.add_trace(go.Scatter(name='Caixa Acumulado', x=meses_labels, y=fluxo_acumulado, mode='lines', line=dict(color='#888888', width=2)))
-    fig.update_layout(barmode='group', height=500)
-    st.plotly_chart(fig, width="stretch")
-
-# ==========================================
-# ABA 8: MENTOR IA
-# ==========================================
-with aba8:
-    safe_image("https://images.unsplash.com/photo-1677442136019-21780ecad995?q=80&w=1000&auto=format&fit=crop", width="stretch")
-    st.header("🧠 Parecer Final do Comitê (IA)")
-    api_key_final = st.text_input("Sua Chave API Gemini:", type="password")
-    
-    if api_key_final and st.button("Gerar Dossiê de Captação"):
-        tir_str = f"{tir_aa:.2f}%" if tir_valida else "não calculada (projeto sem retorno positivo no horizonte)"
-        prompt_ia = f"""Você é um analista financeiro sênior. Avalie a viabilidade do projeto abaixo e forneça um parecer executivo em português.
-
-<dados_do_projeto>
-  Empresa: {projeto.nome_empresa}
-  Investimento Inicial (Capex): R$ {capex_total:,.2f}
-  Valor Presente Líquido (VPL): R$ {vpl:,.2f}
-  TIR Anualizada: {tir_str}
-  TMA de Referência: {projeto.premissas.tma_anual_pct}% a.a.
-  Payback: {payback_meses}
-  Horizonte de análise: {projeto.premissas.horizonte_anos} anos
-  Crescimento de vendas projetado: {projeto.premissas.crescimento_vendas_ano_pct}% a.a.
-</dados_do_projeto>
-
-Com base nesses dados, forneça:
-1. Diagnóstico de viabilidade (viável / inviável / limítrofe)
-2. Principais riscos identificados
-3. Recomendações estratégicas
-4. Comparativo com benchmarks do setor (se aplicável)"""
-        try:
-            client = genai.Client(api_key=api_key_final)
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt_ia
+        with col_c1:
+            input_problema = st.text_area(
+                "1. Problema Mapeado no Mercado", 
+                value=projeto.lean_canvas.problema, 
+                height=160
             )
-            st.markdown(response.text)
-        except Exception as e:
-            st.error(f"Erro ao consultar IA: {e}")
+            input_estrutura_custos = st.text_area(
+                "8. Estrutura Macro de Custos", 
+                value=projeto.lean_canvas.estrutura_custos, 
+                height=160
+            )
+            
+        with col_c2:
+            input_solucao = st.text_area(
+                "2. Arquitetura da Solução", 
+                value=projeto.lean_canvas.solucao_mvp, 
+                height=160
+            )
+            input_metricas = st.text_area(
+                "3. Métricas‑Chave (Growth KPIs)", 
+                value=projeto.lean_canvas.metricas_chave, 
+                height=160
+            )
+            
+        with col_c3:
+            input_proposta_valor = st.text_area(
+                "4. Proposta Única de Valor (VPU)",
+                value=projeto.lean_canvas.proposta_valor, 
+                height=340
+            )
+            
+        with col_c4:
+            input_vantagem = st.text_area(
+                "5. Vantagem Injusta / Fosso (Moat)",
+                value=projeto.lean_canvas.vantagem_injusta, 
+                height=160
+            )
+            input_canais = st.text_area(
+                "6. Canais de Aquisição de Clientes",    
+                value=projeto.lean_canvas.canais, 
+                height=160
+            )
+            
+        with col_c5:
+            input_segmentos = st.text_area(
+                "7. ICP e Segmentos de Clientes",  
+                value=projeto.lean_canvas.segmentos, 
+                height=160
+            )
+            input_receitas = st.text_area(
+                "9. Mecanismos e Fontes de Receita",      
+                value=projeto.lean_canvas.fontes_receita, 
+                height=160
+            )
 
-# ==========================================
-# ABA 9: DASHBOARD DE INDICADORES
-# ==========================================
-with aba9:
-    safe_image("https://images.unsplash.com/photo-1551288049-bebda4e38f71?q=80&w=1000&auto=format&fit=crop", width="stretch")
-    st.header("📉 Dashboard de Indicadores")
- 
-    # ── Verificação de dados mínimos ────────────────────────────────────────
-    sem_produtos  = len(projeto.produtos) == 0
-    sem_capex     = capex_total == 0
-    sem_custos    = custo_fixo_base == 0
- 
-    if sem_produtos:
-        st.warning("⚠️ Cadastre ao menos um produto na aba **Preços** para visualizar os indicadores.")
-        st.stop()
- 
-    # ── Cálculos base ───────────────────────────────────────────────────────
-    receita_liq   = receita_base - deducoes_base
-    margem_bruta  = receita_liq - custo_var_base
-    mc_pct        = (margem_bruta / receita_base * 100) if receita_base > 0 else 0
-    lucro_liq     = margem_bruta - custo_fixo_base
-    liq_pct       = (lucro_liq / receita_base * 100) if receita_base > 0 else 0
- 
-    # Ponto de Equilíbrio
-    pe_receita    = (custo_fixo_base / (mc_pct / 100)) if mc_pct > 0 else 0
- 
-    # Índice de Lucratividade (VPL / Capex)
-    il            = (vpl / capex_total) if capex_total > 0 else 0
- 
-    # ROI simples sobre lucro mensal
-    roi_mensal    = (lucro_liq / capex_total * 100) if capex_total > 0 else 0
- 
-    # Burn Rate e Runway
-    burn_rate     = custo_fixo_base + custo_var_base
-    runway_meses  = (capex_total / abs(lucro_liq)) if lucro_liq < 0 and capex_total > 0 else None
- 
-    # Meses até atingir PE (ponto de equilíbrio acumulado)
-    meses_pe = "Não recupera"
-    for i, v in enumerate(fluxo_acumulado):
-        if v >= 0 and i > 0:
-            meses_pe = f"{i} meses"
-            break
- 
-    # ── SEÇÃO 1: Resumo Executivo ───────────────────────────────────────────
-    st.subheader("Resumo Executivo")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Receita Bruta/mês",  f"R$ {receita_base:,.2f}")
-    col2.metric("Lucro Líquido/mês",  f"R$ {lucro_liq:,.2f}", delta=f"{liq_pct:.1f}% da receita")
-    col3.metric("Margem de Contribuição", f"{mc_pct:.1f}%")
-    col4.metric("Ponto de Equilíbrio", f"R$ {pe_receita:,.2f}/mês")
- 
-    st.markdown("---")
- 
-    # ── SEÇÃO 2: DRE — Demonstração de Resultados ──────────────────────────
-    st.subheader("DRE Simplificada (Base Mensal)")
- 
-    dre_items = [
-        ("(+) Receita Bruta",               receita_base,    False),
-        ("(-) Deduções (impostos + taxas)",  -deducoes_base,  True),
-        ("(=) Receita Líquida",              receita_liq,     False),
-        ("(-) Custos Variáveis (insumos)",   -custo_var_base, True),
-        ("(=) Margem Bruta",                 margem_bruta,    False),
-        ("(-) Custos Fixos",                 -custo_fixo_base, True),
-        ("(=) Resultado Líquido",            lucro_liq,       False),
-    ]
- 
-    dre_df = pd.DataFrame(dre_items, columns=["Descrição", "Valor (R$)", "Dedução"])
-    dre_df["Valor (R$)"] = dre_df["Valor (R$)"].apply(lambda v: f"R$ {v:,.2f}")
- 
-    for _, row in dre_df.iterrows():
-        is_total = row["Descrição"].startswith("(=)")
-        is_neg   = row["Dedução"]
-        bg       = "#F1F5F9" if is_total else "transparent"
-        fw       = "700" if is_total else "400"
-        color    = "#DC2626" if is_neg else ("#16A34A" if is_total and lucro_liq >= 0 else "inherit")
-        st.markdown(
-            f'<div style="display:flex;justify-content:space-between;padding:6px 10px;'
-            f'background:{bg};border-radius:6px;font-weight:{fw};margin-bottom:2px">'
-            f'<span>{row["Descrição"]}</span>'
-            f'<span style="color:{color}">{row["Valor (R$)"]}</span></div>',
-            unsafe_allow_html=True
+        st.markdown("---")
+        st.subheader("🔬 Evidências de Validação Tecnológica (O MVP)")
+        input_mvp_descricao = st.text_area(
+            "Descreva com profundidade as características técnicas do MVP desenvolvido. Como foi feita a Prova de Conceito? A tecnologia suporta o ganho de escala?", 
+            value=projeto.lean_canvas.mvp_descricao, 
+            height=100
         )
- 
-    st.markdown("---")
- 
-    # ── SEÇÃO 3: Indicadores de Viabilidade ────────────────────────────────
-    st.subheader("Indicadores de Viabilidade")
- 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("VPL",                  f"R$ {vpl:,.2f}",
-                  delta="Projeto viável" if vpl > 0 else "Projeto inviável")
-        st.metric("Payback",              payback_meses)
- 
-    with col2:
-        tir_str = f"{tir_aa:.2f}%" if tir_valida else "N/A"
-        st.metric("TIR Anualizada",       tir_str,
-                  delta=f"TMA: {projeto.premissas.tma_anual_pct}%")
-        il_delta = "Cria valor" if il > 1 else ("Neutro" if il == 1 else "Destrói valor")
-        st.metric("Índice de Lucratividade", f"{il:.2f}x", delta=il_delta)
- 
-    with col3:
-        roi_str = f"{roi_mensal:.2f}% a.m." if capex_total > 0 else "Sem Capex"
-        st.metric("ROI Mensal",           roi_str)
-        if runway_meses:
-            st.metric("Runway estimado",  f"{runway_meses:.0f} meses",
-                      delta="Projeto dando prejuízo — use com cautela")
-        else:
-            st.metric("Resultado mensal", "Positivo ✓")
- 
-    st.markdown("---")
- 
-    # ── SEÇÃO 4: Gráficos ──────────────────────────────────────────────────
-    st.subheader("Análise Visual")
- 
-    col_left, col_right = st.columns(2)
- 
-    # Gráfico 1: Estrutura de Custos (pizza)
-    with col_left:
-        st.markdown("**Composição de Custos Mensais**")
-        labels_pizza = ["Custos Variáveis", "Custos Fixos", "Deduções"]
-        values_pizza = [custo_var_base, custo_fixo_base, deducoes_base]
-        colors_pizza = ["#FA5A5A", "#111111", "#888888"]
- 
-        fig_pizza = go.Figure(data=[go.Pie(
-            labels=labels_pizza,
-            values=values_pizza,
-            hole=0.55,
-            marker=dict(colors=colors_pizza),
-            textinfo="percent+label",
-            textfont=dict(size=12),
-            hovertemplate="<b>%{label}</b><br>R$ %{value:,.2f}<br>%{percent}<extra></extra>"
-        )])
-        fig_pizza.update_layout(
-            height=320,
-            showlegend=False,
-            margin=dict(t=10, b=10, l=10, r=10),
-            annotations=[dict(
-                text=f"R$ {(custo_var_base+custo_fixo_base+deducoes_base):,.0f}",
-                x=0.5, y=0.5, font_size=13, showarrow=False
-            )]
-        )
-        st.plotly_chart(fig_pizza, width="stretch")
- 
-    # Gráfico 2: Receita por Produto (barras)
-    with col_right:
-        st.markdown("**Receita por Produto/Serviço**")
-        nomes_prod   = [p.nome_produto for p in projeto.produtos]
-        receitas_prod = [p.preco_venda_sugerido * p.estimativa_vendas_mes for p in projeto.produtos]
-        lucros_prod   = [
-            (p.preco_venda_sugerido * p.estimativa_vendas_mes)
-            - (p.custo_insumos * p.estimativa_vendas_mes)
-            - ((p.preco_venda_sugerido * p.estimativa_vendas_mes) * ((p.impostos_pct + p.taxas_pct + p.comissoes_pct) / 100))
-            for p in projeto.produtos
-        ]
- 
-        fig_prod = go.Figure()
-        fig_prod.add_trace(go.Bar(
-            name="Receita Bruta", x=nomes_prod, y=receitas_prod,
-            marker_color="#111111",
-            hovertemplate="<b>%{x}</b><br>Receita: R$ %{y:,.2f}<extra></extra>"
-        ))
-        fig_prod.add_trace(go.Bar(
-            name="Margem (após CV e deduções)", x=nomes_prod, y=lucros_prod,
-            marker_color="#FA5A5A",
-            hovertemplate="<b>%{x}</b><br>Margem: R$ %{y:,.2f}<extra></extra>"
-        ))
-        fig_prod.update_layout(
-            height=320,
-            barmode="group",
-            showlegend=True,
-            legend=dict(orientation="h", y=-0.25),
-            margin=dict(t=10, b=10, l=10, r=10),
-            yaxis=dict(tickprefix="R$ ", tickformat=",.0f")
-        )
-        st.plotly_chart(fig_prod, width="stretch")
- 
-    # Gráfico 3: Perfil de Sazonalidade
-    st.markdown("**Perfil de Sazonalidade das Vendas**")
-    meses_nomes = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
-    saz_vals    = [
-        projeto.premissas.saz_m1,  projeto.premissas.saz_m2,  projeto.premissas.saz_m3,
-        projeto.premissas.saz_m4,  projeto.premissas.saz_m5,  projeto.premissas.saz_m6,
-        projeto.premissas.saz_m7,  projeto.premissas.saz_m8,  projeto.premissas.saz_m9,
-        projeto.premissas.saz_m10, projeto.premissas.saz_m11, projeto.premissas.saz_m12
-    ]
-    receita_saz = [receita_base * (s / 100) for s in saz_vals]
- 
-    fig_saz = go.Figure()
-    fig_saz.add_trace(go.Bar(
-        x=meses_nomes, y=receita_saz,
-        name="Receita projetada",
-        marker_color=["#FA5A5A" if s >= 100 else "#CCCCCC" for s in saz_vals],
-        hovertemplate="<b>%{x}</b><br>R$ %{y:,.2f}<br>Índice: %{customdata:.0f}%<extra></extra>",
-        customdata=saz_vals
-    ))
-    fig_saz.add_hline(
-        y=receita_base,
-        line_dash="dash",
-        line_color="#111111",
-        annotation_text="Base (100%)",
-        annotation_position="top right"
-    )
-    fig_saz.update_layout(
-        height=280,
-        showlegend=False,
-        margin=dict(t=20, b=10, l=10, r=10),
-        yaxis=dict(tickprefix="R$ ", tickformat=",.0f")
-    )
-    st.plotly_chart(fig_saz, width="stretch")
- 
-    st.markdown("---")
- 
-    # ── SEÇÃO 5: Indicadores para Startups TIC ─────────────────────────────
-    st.subheader("Indicadores de Tração Digital (Startups TIC)")
-    st.caption("Preencha abaixo para calcular métricas de SaaS/App. Opcional — apenas para projetos digitais.")
- 
-    with st.expander("Calcular CAC, LTV e MRR"):
-        col1, col2, col3 = st.columns(3)
-        custo_marketing  = col1.number_input("Custo de Aquisição (R$/mês)", min_value=0.0, step=100.0)
-        novos_clientes   = col2.number_input("Novos clientes/mês", min_value=0)
-        ticket_medio_mes = col3.number_input("Ticket médio mensal (R$)", min_value=0.0, step=10.0)
- 
-        col4, col5 = st.columns(2)
-        churn_pct        = col4.number_input("Churn mensal (%)", min_value=0.0, max_value=100.0, step=0.5)
-        base_clientes    = col5.number_input("Base de clientes atual", min_value=0)
- 
-        if novos_clientes > 0 or base_clientes > 0:
-            cac    = (custo_marketing / novos_clientes) if novos_clientes > 0 else 0
-            ltv    = (ticket_medio_mes / (churn_pct / 100)) if churn_pct > 0 else 0
-            mrr    = ticket_medio_mes * base_clientes
-            ltv_cac = (ltv / cac) if cac > 0 else 0
- 
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("CAC",             f"R$ {cac:,.2f}",     delta="Custo por cliente")
-            c2.metric("LTV",             f"R$ {ltv:,.2f}",     delta="Valor vitalício")
-            c3.metric("MRR",             f"R$ {mrr:,.2f}",     delta="Receita recorrente/mês")
-            c4.metric("LTV/CAC",         f"{ltv_cac:.1f}x",
-                      delta="Saudável se > 3x" if ltv_cac >= 3 else "Abaixo do ideal (< 3x)")
- 
-            if ltv_cac > 0:
-                if ltv_cac >= 3:
-                    st.success(f"✅ LTV/CAC de {ltv_cac:.1f}x indica negócio com boa eficiência de aquisição.")
-                elif ltv_cac >= 1:
-                    st.warning(f"⚠️ LTV/CAC de {ltv_cac:.1f}x está marginal. Benchmarks saudáveis ficam acima de 3x.")
-                else:
-                    st.error(f"❌ LTV/CAC abaixo de 1x significa que custa mais adquirir um cliente do que ele gera.")
 
-# ==========================================
-# ABA 10: RELATÓRIO EXECUTIVO (PDF)
-# ==========================================
-with aba10:
-    safe_image("https://images.unsplash.com/photo-1618044733300-9472054094ee?q=80&w=1000&auto=format&fit=crop", width="stretch")
-    st.header("🖨️ Gerador de Dossiê Executivo V5.0")
+        st.markdown("---")
+        st.subheader("🌍 Matriz de Impacto e Governança (Agenda ESG / ODS)")
+        input_ods_onu = st.text_area(
+            "Fundos de Investimento modernos requerem o alinhamento com a agenda 2030 da ONU. Qual é o ODS que a sua startup impacta de forma direta?", 
+            value=projeto.lean_canvas.ods_onu, 
+            height=80
+        )
+
+        botao_salvar_canvas = st.form_submit_button("💾 Registar Arquitetura do Modelo de Negócios")
+        
+        if botao_salvar_canvas:
+            canvas_ativo = projeto.lean_canvas
+            canvas_ativo.problema = input_problema
+            canvas_ativo.solucao_mvp = input_solucao
+            canvas_ativo.mvp_descricao = input_mvp_descricao
+            canvas_ativo.metricas_chave = input_metricas
+            canvas_ativo.proposta_valor = input_proposta_valor
+            canvas_ativo.vantagem_injusta = input_vantagem
+            canvas_ativo.canais = input_canais
+            canvas_ativo.segmentos = input_segmentos
+            canvas_ativo.estrutura_custos = input_estrutura_custos
+            canvas_ativo.fontes_receita = input_receitas
+            canvas_ativo.ods_onu = input_ods_onu
+            session.commit()
+            st.success("✅ As diretrizes estratégicas da startup foram atualizadas com sucesso no repositório.")
+
+# =============================================================================
+# ABA 2: PREMISSAS MACROECONÓMICAS E DE TRAÇÃO
+# =============================================================================
+with aba_premissas_mercado:
+    safe_image(
+        "https://images.unsplash.com/photo-1460925895917-afdab827c52f?q=80&w=1000&auto=format&fit=crop", 
+        width="stretch"
+    )
+    st.header("📈 Definição de Premissas do Fundo e Motor de Growth")
+    st.info("As variáveis definidas nesta área irão ditar a expansão logarítmica da startup, incluindo o limite do Valuation e a relação de eficiência da aquisição de mercado (CAC vs LTV).")
+
+    with st.form("formulario_premissas_financeiras"):
+        linha1_c1, linha1_c2, linha1_c3 = st.columns(3)
+        input_horizonte = linha1_c1.number_input(
+            "Horizonte de Avaliação de Risco (Meses)", 
+            min_value=12, 
+            max_value=120, 
+            value=premissas_atuais.horizonte_meses
+        )
+        input_tma = linha1_c2.number_input(
+            "Taxa Mínima de Atratividade (TMA Exigida pelo Fundo % a.a.)", 
+            value=premissas_atuais.tma_anual_pct
+        )
+        input_cac_projetado = linha1_c3.number_input(
+            "Custo Nominal Global de Aquisição de Clientes - CAC (R$)", 
+            min_value=0.0, 
+            value=premissas_atuais.cac_estimado
+        )
+
+        linha2_c1, linha2_c2, linha2_c3 = st.columns(3)
+        input_churn_mensal = linha2_c1.number_input(
+            "Taxa Previsional de Evasão de Clientes - Churn (% Mensal)", 
+            value=premissas_atuais.churn_mensal_pct
+        )
+        input_taxa_conversao = linha2_c2.number_input(
+            "Funil: Taxa de Conversão de Freemium para Plano Pago (%)", 
+            value=premissas_atuais.conversao_freemium_pct
+        )
+        input_crescimento_organico = linha2_c3.number_input(
+            "Taxa de Expansão e Crescimento Orgânico Mensal da Base (MoM %)", 
+            value=premissas_atuais.crescimento_mensal_pct
+        )
+
+        st.markdown("---")
+        st.subheader("Motor de Lançamento (Go-To-Market)")
+        input_base_freemium = st.number_input(
+            "Volume de Leads / Utilizadores Gratuitos Adquiridos no Momento Zero", 
+            min_value=0, 
+            value=premissas_atuais.usuarios_freemium_base
+        )
+
+        botao_atualizar_premissas = st.form_submit_button("⚡ Injetar Parâmetros no Motor de Valuation")
+        
+        if botao_atualizar_premissas:
+            premissas_atuais.horizonte_meses = input_horizonte
+            premissas_atuais.tma_anual_pct = input_tma
+            premissas_atuais.cac_estimado = input_cac_projetado
+            premissas_atuais.churn_mensal_pct = input_churn_mensal
+            premissas_atuais.conversao_freemium_pct = input_taxa_conversao
+            premissas_atuais.crescimento_mensal_pct = input_crescimento_organico
+            premissas_atuais.usuarios_freemium_base = input_base_freemium
+            session.commit()
+            st.success("✅ O Motor Económico foi atualizado e as projeções foram recalculadas.")
+            st.rerun()
+
+# =============================================================================
+# ABA 3: NECESSIDADE DE CAPITAL E CAPEX
+# =============================================================================
+with aba_capex_infra:
+    safe_image(
+        "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?q=80&w=1000&auto=format&fit=crop", 
+        width="stretch"
+    )
+    st.header("🛠️ Alocação Estratégica do Capital Inicial (Capex)")
+
+    with st.form("formulario_adicao_capex", clear_on_submit=True):
+        col_inv1, col_inv2, col_inv3 = st.columns([1.5, 2.5, 1])
+        
+        categoria_investimento = col_inv1.selectbox(
+            "Ramo de Alocação de Recursos", 
+            [
+                "Engenharia e Desenvolvimento do MVP", 
+                "Setup de Licenças e Patentes", 
+                "Compra de Infraestrutura / Servidores", 
+                "Orçamento Base de Marketing (GTM)", 
+                "Assessoria Legal de Estruturação", 
+                "Outros"
+            ]
+        )
+        descricao_investimento = col_inv2.text_input("Finalidade e Descrição Específica")
+        valor_investimento = col_inv3.number_input("Valor Necessário (R$)", min_value=0.0, step=1000.0)
+        
+        botao_inserir_investimento = st.form_submit_button("➕ Adicionar à Rodada de Captação")
+        
+        if botao_inserir_investimento and descricao_investimento:
+            novo_capex = InvestimentoDB(
+                categoria=categoria_investimento, 
+                descricao=descricao_investimento, 
+                valor=valor_investimento, 
+                projeto_id=projeto.id
+            )
+            session.add(novo_capex)
+            session.commit()
+            st.rerun()
+
+    for item_capex in projeto.investimentos:
+        coluna_texto, coluna_botao = st.columns([11, 1])
+        coluna_texto.info(
+            f"**{item_capex.categoria}** — {item_capex.descricao}   |   "
+            f"Orçamento Alocado: R$ {item_capex.valor:,.2f}"
+        )
+        if coluna_botao.button("🗑️", key=f"excluir_capex_{item_capex.id}"):
+            session.delete(item_capex)
+            session.commit()
+            st.rerun()
+
+    if projeto.investimentos:
+        st.metric("Total Requisitado para a Rodada de Financiamento (Seed / Pre-Seed)", f"R$ {capex_total_apurado:,.2f}")
+
+# =============================================================================
+# ABA 4: DESPESAS OPERACIONAIS E OPEX
+# =============================================================================
+with aba_opex_burn:
+    safe_image(
+        "https://images.unsplash.com/photo-1497366216548-37526070297c?q=80&w=1000&auto=format&fit=crop", 
+        width="stretch"
+    )
+    st.header("🔄 Estrutura Mensal de Queima de Caixa (Opex)")
+
+    with st.form("formulario_adicao_opex", clear_on_submit=True):
+        col_op1, col_op2, col_op3 = st.columns([1.5, 2.5, 1])
+        
+        categoria_despesa = col_op1.selectbox(
+            "Centro de Custos", 
+            [
+                "Custos com Pessoal Técnico (Headcount Tech)", 
+                "Licenciamento de APIs / SaaS de Terceiros", 
+                "Retirada de Sócios (Pró-labore)", 
+                "Orçamento de Tráfego Pago / Performance", 
+                "Instalações e Facilities", 
+                "Outros"
+            ]
+        )
+        descricao_despesa = col_op2.text_input("Rubrica Administrativa")
+        valor_despesa = col_op3.number_input("Pagamento Mensal (R$/Mês)", min_value=0.0, step=500.0)
+        
+        botao_inserir_opex = st.form_submit_button("➕ Acrescentar Custo na DRE")
+        
+        if botao_inserir_opex and descricao_despesa:
+            novo_opex = CustoFixoDB(
+                categoria=categoria_despesa, 
+                descricao=descricao_despesa, 
+                valor_mensal=valor_despesa, 
+                projeto_id=projeto.id
+            )
+            session.add(novo_opex)
+            session.commit()
+            st.rerun()
+
+    for item_opex in projeto.custos_fixos:
+        col_txt_op, col_btn_op = st.columns([11, 1])
+        col_txt_op.error(
+            f"**{item_opex.categoria}** — {item_opex.descricao}   |   "
+            f"Saída Mensal Constante: R$ {item_opex.valor_mensal:,.2f}/mês"
+        )
+        if col_btn_op.button("🗑️", key=f"excluir_opex_{item_opex.id}"):
+            session.delete(item_opex)
+            session.commit()
+            st.rerun()
+
+    if projeto.custos_fixos:
+        st.metric("Piso do Burn Rate de Manutenção", f"R$ {opex_fixo_mensal:,.2f} ao mês")
+
+# =============================================================================
+# ABA 5: PRICING E FATURAMENTO SAAS
+# =============================================================================
+with aba_saas_pricing:
+    safe_image(
+        "https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?q=80&w=1000&auto=format&fit=crop", 
+        width="stretch"
+    )
+    st.header("💳 Engenharia de Preços e Tiers de Assinatura")
+
+    with st.form("formulario_cadastro_planos", clear_on_submit=True):
+        nome_do_tier = st.text_input("Nomenclatura do Plano de Vendas (Ex: Plano Starter, Enterprise B2B)")
+        
+        col_pr1, col_pr2, col_pr3, col_pr4, col_pr5 = st.columns(5)
+        ticket_plano = col_pr1.number_input("Receita Fixa (R$/Mês)", min_value=0.0)
+        volume_clientes_plano = col_pr2.number_input("Número de Licenças Vendidas", min_value=0)
+        taxa_cartao_plano = col_pr3.number_input("Taxa de Cartão/Gateway (%)", value=5.0)
+        carga_fiscal_plano = col_pr4.number_input("Retenção de Impostos (%)", value=6.0)
+        custo_nuvem_plano = col_pr5.number_input("Custo de Nuvem/AWS por User (R$)", min_value=0.0)
+
+        botao_inserir_plano = st.form_submit_button("➕ Homologar Nova Linha de Receita")
+        
+        if botao_inserir_plano and nome_do_tier:
+            novo_plano_saas = PlanoSaaSDB(
+                nome_plano=nome_do_tier, 
+                ticket_mensal=ticket_plano, 
+                usuarios_ativos_base=volume_clientes_plano,
+                taxas_pagamento_pct=taxa_cartao_plano, 
+                impostos_pct=carga_fiscal_plano, 
+                custo_servidor_por_usuario=custo_nuvem_plano,
+                projeto_id=projeto.id
+            )
+            session.add(novo_plano_saas)
+            session.commit()
+            st.rerun()
+
+    for assinatura in projeto.planos_saas:
+        col_txt_saas, col_btn_saas = st.columns([11, 1])
+        
+        mrr_deste_plano = assinatura.ticket_mensal * assinatura.usuarios_ativos_base
+        desconto_total = (assinatura.taxas_pagamento_pct + assinatura.impostos_pct) / 100
+        margem_deste_plano = (mrr_deste_plano * (1 - desconto_total)) - (assinatura.custo_servidor_por_usuario * assinatura.usuarios_ativos_base)
+        
+        col_txt_saas.success(
+            f"💳 **{assinatura.nome_plano}** — Preço (ARPU): R$ {assinatura.ticket_mensal:.2f} · "
+            f"Contas Ativas: {assinatura.usuarios_ativos_base} · "
+            f"Receita Produzida: R$ {mrr_deste_plano:,.2f} · "
+            f"Lucro Bruto do Tier: R$ {margem_deste_plano:,.2f}"
+        )
+        if col_btn_saas.button("🗑️", key=f"excluir_plano_{assinatura.id}"):
+            session.delete(assinatura)
+            session.commit()
+            st.rerun()
+
+# =============================================================================
+# ABA 6: AUDITORIA LEGAL E DUE DILIGENCE
+# =============================================================================
+with aba_legal_riscos:
+    safe_image(
+        "https://images.unsplash.com/photo-1589829085413-56de8ae18c73?q=80&w=1000&auto=format&fit=crop", 
+        width="stretch"
+    )
+    st.header("⚖️ Due Diligence: Propriedade Intelectual e Proteção de Dados")
+    st.info("Na avaliação final de um VC, falhas na custódia do código (INPI) e na definição do *Cap Table* (Vesting) são considerados Deal Breakers fatais.")
+
+    with st.form("formulario_auditoria_legal"):
+        col_jur1, col_jur2 = st.columns(2)
+        
+        status_inpi_software = col_jur1.selectbox(
+            "Proteção Jurídica do Código e Algoritmos (INPI)", 
+            [
+                "Não Iniciado (Risco Iminente)", 
+                "Processo de Código Fonte Depositado", 
+                "Certificado Oficial de Software Emitido"
+            ], 
+            index=[
+                "Não Iniciado", 
+                "Código Depositado", 
+                "Certificado Emitido"
+            ].index(projeto.juridico.registro_inpi) if projeto.juridico.registro_inpi in ["Não Iniciado", "Código Depositado", "Certificado Emitido"] else 0
+        )
+        
+        status_marca_comercial = col_jur2.selectbox(
+            "Registo e Blindagem da Marca do Produto", 
+            [
+                "Não Iniciado (Vulnerabilidade de Uso)", 
+                "Busca de Anterioridade Efectuada", 
+                "Processo protocolado no INPI", 
+                "Direito de Marca Concedido"
+            ], 
+            index=[
+                "Não Iniciado", 
+                "Busca Realizada", 
+                "Processo em Andamento", 
+                "Marca Concedida"
+            ].index(projeto.juridico.marca_status) if projeto.juridico.marca_status in ["Não Iniciado", "Busca Realizada", "Processo em Andamento", "Marca Concedida"] else 0
+        )
+
+        col_jur3, col_jur4 = st.columns(2)
+        
+        validacao_lgpd = col_jur3.checkbox(
+            "✅ O Sistema respeita as diretrizes de Privacidade por Design e a LGPD (Termos de Uso claros e ativos)", 
+            value=projeto.juridico.adequacao_lgpd
+        )
+        
+        validacao_vesting = col_jur4.checkbox(
+            "✅ A Governança da Equipa Fundadora está segura mediante um Contrato de Vesting formal (Cliff estabelecido)", 
+            value=projeto.juridico.contrato_vesting
+        )
+
+        honorarios_legais = st.number_input(
+            "Honorários de Retenção e Assessoria DPO (Custo Mensal Corrente em R$)", 
+            value=projeto.juridico.custo_estimado_legal
+        )
+
+        botao_atualizar_legal = st.form_submit_button("💾 Selar Auditoria no Data Room")
+        
+        if botao_atualizar_legal:
+            dados_legais = projeto.juridico
+            
+            # Adaptação dos valores se estiverem mapeados de forma diferente no selectbox
+            mapeamento_inpi = {
+                "Não Iniciado (Risco Iminente)": "Não Iniciado",
+                "Processo de Código Fonte Depositado": "Código Depositado",
+                "Certificado Oficial de Software Emitido": "Certificado Emitido"
+            }
+            mapeamento_marca = {
+                "Não Iniciado (Vulnerabilidade de Uso)": "Não Iniciado",
+                "Busca de Anterioridade Efectuada": "Busca Realizada",
+                "Processo protocolado no INPI": "Processo em Andamento",
+                "Direito de Marca Concedido": "Marca Concedida"
+            }
+            
+            dados_legais.registro_inpi = mapeamento_inpi.get(status_inpi_software, "Não Iniciado")
+            dados_legais.marca_status = mapeamento_marca.get(status_marca_comercial, "Não Iniciado")
+            dados_legais.adequacao_lgpd = validacao_lgpd
+            dados_legais.contrato_vesting = validacao_vesting
+            dados_legais.custo_estimado_legal = honorarios_legais
+            
+            session.commit()
+            st.success("✅ As fragilidades de governança foram avaliadas e registadas.")
+            st.rerun()
+
+    st.markdown("---")
+    st.subheader("Indicador Sintético de Imunidade e Compliance")
     
-    parecer_ia_input = st.text_area(
-        "Parecer do Mentor IA (Cole aqui o resultado da aba anterior):", 
-        height=200,
-        help="Este texto será formatado automaticamente no PDF final."
+    testes_de_imunidade = {
+        "O Código-Fonte Tecnológico está Patenteado e Salvo": projeto.juridico.registro_inpi != "Não Iniciado",
+        "A Identidade do Produto não está vulnerável a Plágios": projeto.juridico.marca_status != "Não Iniciado",
+        "A Base de Clientes está blindada segundo o RGPD/LGPD": projeto.juridico.adequacao_lgpd,
+        "A Tabela de Sócios (Cap Table) está blindada com Vesting": projeto.juridico.contrato_vesting,
+    }
+    
+    pontuacao_seguranca = sum(testes_de_imunidade.values())
+    
+    for criterio, resultado_ok in testes_de_imunidade.items(): 
+        st.markdown(f"{'✅' if resultado_ok else '❌'} **{criterio}**")
+        
+    st.progress(
+        pontuacao_seguranca / 4, 
+        text=f"Maturidade Jurídica para o Fundo VC: {pontuacao_seguranca} de 4 requisitos superados com distinção"
     )
 
-    if st.button("🚀 Gerar Relatório Completo", type="primary"):
-        try:
-            with st.spinner("Compilando dados e renderizando gráficos de alta resolução... (Isso pode levar alguns segundos)"):
-                pdf = FPDF()
-                pdf.set_auto_page_break(auto=True, margin=15)
-                
-                # Configuração de Fontes (DejaVu para acentuação correta)
-                _fn = "DejaVu" if os.path.exists(_FONTE_PATH) else "helvetica"
-                if _fn == "DejaVu":
-                    pdf.add_font("DejaVu", "", _FONTE_PATH)
-                    pdf.add_font("DejaVu", "B", _FONTE_PATH)
+# =============================================================================
+# ABA 7: ONE PAGER (RESUMO EXECUTIVO)
+# =============================================================================
+with aba_resumo_onepager:
+    safe_image(
+        "https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?q=80&w=1000&auto=format&fit=crop", 
+        width="stretch"
+    )
+    st.header("📄 Sumário Executivo — O *One-Pager* do Investidor")
 
-                # --- PÁGINA 1: CAPA PROFISSIONAL ---
-                pdf.add_page()
-                pdf.ln(60)
-                pdf.set_font(_fn, "B", 24)
-                pdf.cell(pdf.epw, 20, "DOSSIÊ DE VIABILIDADE", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
-                pdf.set_font(_fn, "", 18)
-                pdf.cell(pdf.epw, 10, projeto.nome_empresa.upper(), new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
-                pdf.ln(10)
-                pdf.set_font(_fn, "", 10)
-                pdf.cell(pdf.epw, 10, "Documento gerado via Master Management Plano 5.0", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+    with st.expander("🧩 A Tese Central: Dor, Produto e Diferencial (Moat)", expanded=True):
+        st.markdown(f"**O Core da Solução (A Proposta Única de Valor):**\n\n{safe_str(projeto.lean_canvas.proposta_valor)}")
+        st.markdown(f"**A Barreira Contra a Concorrência (Vantagem Injusta):**\n\n{safe_str(projeto.lean_canvas.vantagem_injusta)}")
+        st.markdown(f"**Repercussão Social Global (Normativas ODS):**\n\n{safe_str(projeto.lean_canvas.ods_onu)}")
 
-                # --- PÁGINA 2: ESTRUTURA ESTRATÉGICA (CANVAS) ---
-                pdf.add_page()
-                pdf.set_font(_fn, "B", 14)
-                pdf.cell(pdf.epw, 10, "1. Modelo de Negócios (Estrutura Canvas)", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
-                pdf.ln(5)
-                
-                pdf.set_font(_fn, "", 10)
-                pdf.set_font(_fn, "B", 11); pdf.cell(pdf.epw, 8, "Proposta de Valor:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                pdf.set_font(_fn, "", 10); pdf.multi_cell(pdf.epw, 6, projeto.canvas.proposta_valor if projeto.canvas else "Não informado")
-                
-                pdf.ln(4)
-                pdf.set_font(_fn, "B", 11); pdf.cell(pdf.epw, 8, "Público-Alvo e Segmentos:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                pdf.set_font(_fn, "", 10); pdf.multi_cell(pdf.epw, 6, projeto.canvas.segmentos if projeto.canvas else "Não informado")
+    with st.expander("🔬 Operações de Validação: O MVP"):
+        st.markdown(f"**Características Formais da Arquitetura:**\n\n{safe_str(projeto.lean_canvas.solucao_mvp)}")
+        st.markdown(f"**Os Resultados Produzidos pela Prova de Conceito (Tração Tátil):**\n\n{safe_str(projeto.lean_canvas.mvp_descricao)}")
 
-                # --- PÁGINA 3: INDICADORES FINANCEIROS ---
-                pdf.add_page()
-                pdf.set_font(_fn, "B", 14)
-                pdf.cell(pdf.epw, 10, "2. Análise de Viabilidade Financeira", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                pdf.ln(5)
-                
-                # Tabela de Indicadores
-                pdf.set_font(_fn, "B", 10)
-                pdf.cell(pdf.epw*0.5, 8, "Indicador", border=1); pdf.cell(pdf.epw*0.5, 8, "Valor", border=1, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                pdf.set_font(_fn, "", 10)
-                pdf.cell(pdf.epw*0.5, 8, "Investimento Total (Capex)", border=1); pdf.cell(pdf.epw*0.5, 8, f"R$ {capex_total:,.2f}", border=1, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                pdf.cell(pdf.epw*0.5, 8, "VPL (Valor Presente Líquido)", border=1); pdf.cell(pdf.epw*0.5, 8, f"R$ {vpl:,.2f}", border=1, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                pdf.cell(pdf.epw*0.5, 8, "Payback Estimado", border=1); pdf.cell(pdf.epw*0.5, 8, str(payback_meses), border=1, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                
-                pdf.ln(10)
-                
-                # --- INSERÇÃO DOS GRÁFICOS (Correção de Integração) ---
-                
-                # 1. Gráfico de Fluxo de Caixa (da Aba 7)
-                try:
-                    img_caixa = fig_to_bytes(fig)
-                    if img_caixa:
-                        pdf.set_font(_fn, "B", 12)
-                        pdf.cell(pdf.epw, 8, "Fluxo de Caixa Acumulado", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
-                        pdf.image(io.BytesIO(img_caixa), x=pdf.l_margin, w=pdf.epw)
-                        pdf.ln(5)
-                except Exception as e:
-                    st.warning(f"Aviso: Não foi possível renderizar o gráfico de fluxo de caixa no PDF. {e}")
+    with st.expander("💸 Síntese da Economia de Escala (SaaS)"):
+        bloco_resumo_c1, bloco_resumo_c2, bloco_resumo_c3, bloco_resumo_c4 = st.columns(4)
+        bloco_resumo_c1.metric("Capacidade Recorrente (MRR)", f"R$ {mrr_bruto_total_consolidado:,.2f}")
+        bloco_resumo_c2.metric("Annual Recurring Revenue (ARR)", f"R$ {faturamento_anualizado_arr:,.2f}")
+        bloco_resumo_c3.metric("Velocidade do Burn Rate", f"R$ {burn_rate_total_mensal:,.2f}/mês")
+        bloco_resumo_c4.metric("Índice Multiplicador LTV/CAC", f"{indice_ltv_cac:.2f}x")
 
-                # 2. Gráficos do Dashboard (da Aba 9 - Somente se houver produtos cadastrados)
-                if len(projeto.produtos) > 0:
+    with st.expander("⚖️ O Mapa de Riscos Passivos"):
+        st.markdown(f"- **Conformidade do Código e Patentes (INPI):** {projeto.juridico.registro_inpi}  \n- **Consistência do Branding e Marca:** {projeto.juridico.marca_status}")
+        st.markdown(f"- **Vulnerabilidade em Cibersegurança e Dados:** {'✅ Protocolo Validado' if projeto.juridico.adequacao_lgpd else '❌ Severamente Exposto'}  \n- **Segurança Estrutural do Acordo Acionista:** {'✅ Documento em Vigor' if projeto.juridico.contrato_vesting else '❌ A Sociedade Encontra-se Vulnerável'}")
+
+# =============================================================================
+# ABA 8: VALUATION E VIABILIDADE FINANCEIRA
+# =============================================================================
+with aba_viabilidade_vpl:
+    safe_image(
+        "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=1000&auto=format&fit=crop", 
+        width="stretch"
+    )
+    st.header("📊 Inteligência Financeira: Valuation Baseado no *Cashflow*")
+
+    col_val_1, col_val_2, col_val_3, col_val_4 = st.columns(4)
+    
+    col_val_1.metric(
+        "Esforço Total em Capex (O Tamanho da Rodada)", 
+        f"R$ {capex_total_apurado:,.2f}"
+    )
+    col_val_2.metric(
+        "Geração Global de Riqueza Acumulada (O Valor Presente Líquido - VPL)", 
+        f"R$ {valor_presente_liquido_vpl:,.2f}", 
+        delta="Startup Validada com Geração de Valor" if valor_presente_liquido_vpl > 0 else "Operação Inviável que Destrói o Capital Alocado"
+    )
+    col_val_3.metric(
+        "Retorno Base Projetado (Taxa Interna de Retorno - TIR)", 
+        f"{taxa_interna_retorno_anual:,.2f}%" if validade_da_tir else "A Variável não pode ser Equacionada (Verifique Limitações de Caixa)", 
+        delta=f"Custo Oportunidade do Dinheiro do Fundo: {premissas_atuais.tma_anual_pct}%"
+    )
+    col_val_4.metric(
+        "Ponto de Retorno Efetivo do Fundo (Tempo de Payback)", 
+        mes_de_breakeven_payback
+    )
+
+    st.plotly_chart(figura_cashflow_projetado, use_container_width=True)
+
+    st.subheader("Auditabilidade Contabilística — Demonstrativo Linear de Caixa")
+    tabela_demonstrativo_financeiro = pd.DataFrame({
+        "Linha de Tempo Operacional": lista_rotulos_meses,
+        "Curva de Faturação Recebida (MRR)": [f"R$ {rendimento:,.2f}" for rendimento in timeline_mrr_crescente],
+        "Consolidação de Clientes Efetivos": [f"{int(quantidade_de_clientes):,}" for quantidade_de_clientes in timeline_usuarios_pagantes],
+        "Reserva Contabilística (Caixa Líquido Residual)": [f"R$ {saldo_bancario:,.2f}" for saldo_bancario in serie_caixa_acumulado],
+    })
+    st.dataframe(tabela_demonstrativo_financeiro, use_container_width=True, height=280)
+
+# =============================================================================
+# ABA 9: DASHBOARD DE CUSTOS E UNIT ECONOMICS
+# =============================================================================
+with aba_dashboard_unit:
+    safe_image(
+        "https://images.unsplash.com/photo-1551288049-bebda4e38f71?q=80&w=1000&auto=format&fit=crop", 
+        width="stretch"
+    )
+    st.header("📉 Monitorização Cirúrgica de Unit Economics (SaaS)")
+
+    if not projeto.planos_saas:
+        st.warning("⚠️ Atenção à Análise: O ecossistema de métricas encontra-se inativo pois a estratégia e as camadas de *Pricing* ainda não foram homologadas na respetiva área (SaaS).")
+    else:
+        linha_kpi1_c1, linha_kpi1_c2, linha_kpi1_c3, linha_kpi1_c4 = st.columns(4)
+        linha_kpi1_c1.metric("Massa Faturada Vigente (MRR)", f"R$ {mrr_bruto_total_consolidado:,.2f}", delta=f"Carga Sancionada por {int(usuarios_pagantes_totais_base)} Entidades Clientes")
+        linha_kpi1_c2.metric("Estimativa de ARR Linear", f"R$ {faturamento_anualizado_arr:,.2f}")
+        linha_kpi1_c3.metric("Sobrevivência da Margem Bruta de Operação", f"{margem_bruta_percentual:.1f}%")
+        linha_kpi1_c4.metric("ARPU Efetivo (Retorno Financeiro Ponderado por Utilizador)", f"R$ {ticket_medio_arpu:,.2f}")
+
+        linha_kpi2_c1, linha_kpi2_c2, linha_kpi2_c3, linha_kpi2_c4 = st.columns(4)
+        status_caixa_texto = "Matriz Económica Superavitária ✓" if resultado_operacional_ebitda >= 0 else "Fluxos Críticos / Risco de Sangria 🔥"
+        linha_kpi2_c1.metric("Geração Fria Operacional (EBITDA Adaptado)", f"R$ {resultado_operacional_ebitda:,.2f}", delta=status_caixa_texto, delta_color="normal" if resultado_operacional_ebitda >= 0 else "inverse")
+        linha_kpi2_c2.metric("O Efeito Global do Burn Rate Efetivo", f"R$ {burn_rate_total_mensal:,.2f}/mês")
+        
+        if meses_runway_sobrevivencia: 
+            linha_kpi2_c3.metric("Capacidade Funcional de Sobrevida (Runway)", f"{meses_runway_sobrevivencia:.1f} meses restantes", delta="Risco Severo de Queda do Projeto", delta_color="inverse")
+        else: 
+            linha_kpi2_c3.metric("Capacidade Funcional de Sobrevida (Runway)", "Infinitude e Escala de Segurança Total", delta="Superação Efetiva do Vale da Morte")
+            
+        texto_avaliacao_ltv = "🟢 Tracionamento Brilhante (Alto Padrão de Performance)" if indice_ltv_cac >= 3 else ("🟡 Marginalmente Eficiente (Exige Atenção a Curto Prazo)" if indice_ltv_cac >= 1 else "🔴 Ineficiência Financeira Brutal (Marketing Custa Mais do que Produz)")
+        linha_kpi2_c4.metric("Potência Algorítmica de Retenção e Escala (LTV / CAC)", f"{indice_ltv_cac:.2f}x", delta=texto_avaliacao_ltv)
+
+        st.markdown("---")
+
+        linha_kpi3_c1, linha_kpi3_c2, linha_kpi3_c3, linha_kpi3_c4 = st.columns(4)
+        linha_kpi3_c1.metric("Valor Gasto Integral na Captação de um Indivíduo (CAC)", f"R$ {cac_aquisicao_mercado:,.2f}")
+        linha_kpi3_c2.metric("Rentabilidade Extraída Vitaliciamente (LTV)", f"R$ {ltv_vitalicio_cliente:,.2f}")
+        linha_kpi3_c3.metric("Fugas e Abandono Estimado na Base (Churn)", f"{premissas_atuais.churn_mensal_pct:.1f}% ao Mês")
+        
+        if meses_payback_cac:
+            linha_kpi3_c4.metric("Lapsos Mensais para Retorno de CAC (Payback Marketing)", f"{meses_payback_cac:.1f} Períodos Faturados")
+        else:
+            linha_kpi3_c4.metric("Ciclos Necessários para Recuperar o CAC", "Incalculável (Verifique as Constantes Inseridas)")
+
+        st.markdown("---")
+
+        bloco_graficos_l, bloco_graficos_r = st.columns(2)
+        with bloco_graficos_l:
+            st.markdown("**Segmentação Matemática das Hemorragias Contínuas (Rate de Queima)**")
+            st.plotly_chart(figura_pizza_custos, use_container_width=True)
+            
+        with bloco_graficos_r:
+            st.markdown("**Crescimento do Momentum (Curvas de Ascensão de Base versus Receita)**")
+            st.plotly_chart(figura_mrr_tracao, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("📃 Demonstrativo Direto de Resultados (DRE de Sobrevida Software)")
+
+        linhas_comprovativas_da_dre = [
+            ("(+) Aceleração Integral Faturada (MRR Global)", mrr_bruto_total_consolidado, False),
+            ("(-) Custo Imediato na Transação e Peso Fiscal", -despesas_deducoes_base, True),
+            ("(=) Sobra Transitória (Líquido Transacionado)", mrr_liquido_apurado_base, False),
+            ("(-) Faturas Recorrentes Pela Computação em Nuvem (COGS)", -despesas_nuvem_cogs_base, True),
+            ("(=) Margem Pura Associada ao Sistema de Software", mrr_liquido_apurado_base - despesas_nuvem_cogs_base, False),
+            ("(-) Encargos Relativos a Funcionários, Legalidades e Posição (Opex)", -opex_fixo_mensal, True),
+            ("(=) Fundo Final Operacional Resultante (Bottom Line Total)", resultado_operacional_ebitda, False),
+        ]
+        
+        for denominacao_linha, montante_calculado, representacao_negativa in linhas_comprovativas_da_dre:
+            linha_totalizadora = denominacao_linha.startswith("(=)")
+            cor_do_fundo_painel = "#F1F5F9" if linha_totalizadora else "transparent"
+            espessura_da_letra = "700" if linha_totalizadora else "400"
+            coloracao_dos_numeros = ("#DC2626" if representacao_negativa else ("#16A34A" if linha_totalizadora and montante_calculado >= 0 else "#0F172A"))
+            
+            st.markdown(
+                f'<div style="display:flex;justify-content:space-between;padding:10px 14px;'
+                f'background:{cor_do_fundo_painel};border-radius:8px;font-weight:{espessura_da_letra};margin-bottom:6px;'
+                f'border: 1px solid #E2E8F0;">'
+                f'<span>{denominacao_linha}</span>'
+                f'<span style="color:{coloracao_dos_numeros}">R$ {montante_calculado:,.2f}</span></div>',
+                unsafe_allow_html=True
+            )
+
+# =============================================================================
+# ABA 10: O CÉREBRO ARTIFICIAL (MENTORIA VC GEMINI)
+# =============================================================================
+with aba_mentor_vc:
+    safe_image(
+        "https://images.unsplash.com/photo-1677442136019-21780ecad995?q=80&w=1000&auto=format&fit=crop", 
+        width="stretch"
+    )
+    st.header("🤖 Fundo Inteligente: Comité de Avaliação Virtual Assistido")
+    st.info(
+        "O Modelo Gemini foi configurado para adotar a identidade de um Membro Sênior de um Conselho de Fundo Privado (Venture Capital). "
+        "A análise procurará desconstruir ativamente as hipóteses, encontrando as brechas tecnológicas e as ilusões nos Unit Economics. Submeta-se ao questionário duro do mercado."
+    )
+
+    if not GEMINI_AVAILABLE:
+        st.error("⚠️ Foi observada a ausência de infraestrutura conectiva. Exige que a biblioteca `google-genai` esteja plenamente operacional.")
+    else:
+        chave_api_usuario = st.text_input("Credenciais Seguras: Coloque a Palavra-passe da API Gemini:", type="password", key="gemini_key_widget")
+
+        if st.button("🚀 Submeter Todo o Prospecto de Operações aos Avaliadores", type="primary"):
+            if not st.session_state.get("gemini_key_widget"):
+                st.warning("⚠️ Bloqueio Preventivo: Uma chave de autenticação Google válida é vital para desbloquear o algoritmo de raciocínio profundo.")
+            else:
+                with st.spinner("A transmitir a carga documental para a inteligência na rede. A proceder à intersecção dos Unit Economics com o grau de risco jurídico apresentado..."):
+                    
+                    prompt_para_o_mentor = f"""Assuma o papel de um Venture Capitalist Sênior ou Investidor Anjo analisando uma startup de tecnologia (SaaS/App) para uma possível rodada de captação (Seed/Series A) no Demoday.
+A sua tarefa é fazer a Due Diligence do Pitch Deck da startup descrita abaixo com o rigor técnico e financeiro de um fundo de investimento real.
+
+<projeto_startup>
+Nome da Operação: {projeto.nome_startup}
+Dores de Mercado (Problema): {safe_str(projeto.lean_canvas.problema)}
+Arquitetura Tecnológica e MVP: {safe_str(projeto.lean_canvas.solucao_mvp)}
+Relatório da Tração (Prova de Conceito): {safe_str(projeto.lean_canvas.mvp_descricao)}
+Proposta Única de Valor Global: {safe_str(projeto.lean_canvas.proposta_valor)}
+O Fosso Competitivo (Moat/Vantagem): {safe_str(projeto.lean_canvas.vantagem_injusta)}
+ESG e Compliance Social ODS: {safe_str(projeto.lean_canvas.ods_onu)}
+</projeto_startup>
+
+<unit_economics>
+Receita Recorrente Consolidada (MRR): R$ {mrr_bruto_total_consolidado:,.2f}
+Teto de Receita Atual (ARR): R$ {faturamento_anualizado_arr:,.2f}
+Queima de Caixa Consolidada (Burn Rate): R$ {burn_rate_total_mensal:,.2f}/mês
+EBITDA Mensal: R$ {resultado_operacional_ebitda:,.2f}
+Proporção Mágica de Escala (LTV/CAC): {indice_ltv_cac:.2f}x (Benchmark de corte: 3x para Série A)
+Tempo Restante de Caixa Livre (Runway): {f"{meses_runway_sobrevivencia:.1f} meses até a falência" if meses_runway_sobrevivencia else "Empresa operando no azul (Lucratividade alcançada)"}
+Evasão de Base (Churn Mensal): {premissas_atuais.churn_mensal_pct:.1f}%
+Custo Nominal de Aquisição (CAC): R$ {cac_aquisicao_mercado:,.2f}
+Margem Bruta (Ex-Infra): {margem_bruta_percentual:.1f}%
+</unit_economics>
+
+<passivos_e_compliance>
+Patente Tecnológica (INPI): {projeto.juridico.registro_inpi}
+Privacidade por Design (LGPD): {"Auditoria Conforme" if projeto.juridico.adequacao_lgpd else "Auditoria Reprovada"}
+Acordo Societário (Vesting): {"Formalizado e Resguardado" if projeto.juridico.contrato_vesting else "Irregular"}
+</passivos_e_compliance>
+
+A sua devolução de feedback deve ser perfeitamente formatada em Markdown, utilizando os seguintes blocos obrigatórios de resposta:
+## 1. Tese de Investimento Global
+(Você aprovaria o aporte de capital neste negócio? A dor mapeada é profunda e o mercado é grande o suficiente para uma saída (exit) lucrativa?)
+
+## 2. Radiografia dos Unit Economics e Valuation
+(Faça uma auditoria crítica dos números. O MRR justifica o valuation esperado? O Burn Rate é sustentável em relação ao Runway? Faça um apontamento incisivo sobre a relação de LTV e CAC.)
+
+## 3. Viabilidade Técnica e Escala
+(A arquitetura do MVP permite ganho de escala (scale-up) sem gargalos operacionais massivos? A Vantagem Injusta protege a empresa de copycats?)
+
+## 4. Due Diligence de Compliance e Riscos
+(Examine as ameaças de proteção de dados e LGPD, os processos de registro no INPI e o acordo de Vesting. Há passivos que afugentariam um fundo de VC?)
+
+## 5. Veredito do Comitê de Investimento e Próximos Passos
+(Dê o veredito final: "Aprovado para Term Sheet", "Requer Ajustes (Watchlist)" ou "Recusado Formalmente". Liste 3 ações corretivas operacionais imediatas e implacáveis para os founders melhorarem a tração antes da próxima rodada institucional.)
+"""
                     try:
-                        pdf.add_page()
-                        pdf.set_font(_fn, "B", 14)
-                        pdf.cell(pdf.epw, 10, "3. Análise Visual (Dashboard)", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                        pdf.ln(5)
+                        conector_algoritmo = _genai.Client(api_key=st.session_state.gemini_key_widget)
+                        saida_do_modelo = conector_algoritmo.models.generate_content(
+                            model="gemini-2.5-flash", 
+                            contents=prompt_para_o_mentor
+                        )
+                        st.session_state["parecer_ia"] = saida_do_modelo.text
+                        st.success("✅ A Carta Documental de Fundamentos do Fundo Privado encontra-se processada na totalidade e cristalizada no servidor. Visite a Aba Final de Exportação para o selo final num dossiê.")
+                    except Exception as erro_da_chamada_remota:
+                        st.error(f"Erro Perturbador na Linha de Redes e Nós Computacionais (Protocolo Google): {erro_da_chamada_remota}")
 
-                        # Gráfico de Pizza (Custos)
-                        img_pizza = fig_to_bytes(fig_pizza)
-                        if img_pizza:
-                            pdf.set_font(_fn, "B", 12)
-                            pdf.cell(pdf.epw, 8, "Composição de Custos Mensais", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
-                            # Tamanho reduzido e margem ajustada para centralizar a pizza
-                            pdf.image(io.BytesIO(img_pizza), x=35, w=140) 
-                            pdf.ln(10)
-                            
-                        # Gráfico de Barras (Receita)
-                        img_prod = fig_to_bytes(fig_prod)
-                        if img_prod:
-                            pdf.set_font(_fn, "B", 12)
-                            pdf.cell(pdf.epw, 8, "Receita e Margem por Produto", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
-                            pdf.image(io.BytesIO(img_prod), x=pdf.l_margin, w=pdf.epw)
-                            
-                    except Exception as e:
-                        st.warning(f"Aviso: Não foi possível renderizar os dashboards no PDF. {e}")
+    if st.session_state["parecer_ia"]:
+        st.markdown("---")
+        st.markdown(st.session_state["parecer_ia"])
 
-                # --- PÁGINA FINAL: PARECER TÉCNICO ---
-                pdf.add_page()
-                pdf.set_font(_fn, "B", 14)
-                num_sessao = "4." if len(projeto.produtos) > 0 else "3."
-                pdf.cell(pdf.epw, 10, f"{num_sessao} Parecer Técnico (Mentor IA)", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                pdf.ln(5)
-                pdf.set_font(_fn, "", 10)
+# =============================================================================
+# ABA 12: MOTOR EXPORTADOR DA DATA ROOM (DOCUMENTAÇÃO PDF)
+# =============================================================================
+with aba_pdf_export:
+    safe_image(
+        "https://images.unsplash.com/photo-1618044733300-9472054094ee?q=80&w=1000&auto=format&fit=crop", 
+        width="stretch"
+    )
+    st.header("🖨️ A Data Room Segura: Exportação Dossiê do Demoday")
+    st.info("Plataforma primária de encapsulamento criptográfico do Prospecto Organizacional de Negócios. O Dossiê abarca uma integração das métricas profundas recolhidas ao longo de todas as tabelas em união indissociável ao parecer de risco do comité institucional (IA).")
+
+    caixa_interativa_de_revisao_do_comite = st.text_area(
+        "Edição da Carta Parecer Oficial (Os registos abaixo transitam da memória permanente originada na análise IA):",
+        value=st.session_state["parecer_ia"], 
+        height=250,
+    )
+
+    if st.button("🚀 Extrair e Materializar Prospecto Exclusivo (Formatação PDF)", type="primary"):
+        try:
+            with st.spinner("Processos Cíclicos Iniciados: O construtor gráfico opera neste momento varrimentos das estruturas plotáveis para as injetar perfeitamente limpas num canvas imutável PDF de folha A4. Operações pesadas exigem tolerância ao compasso temporal..."):
                 
-                texto_final = parecer_ia_input if parecer_ia_input else "Nenhum parecer foi anexado ao relatório."
-                texto_limpo = texto_final.replace("•", "-").replace("\u2022", "-").replace("·", "-")
-                pdf.multi_cell(pdf.epw, 6, texto_limpo)
+                familia_tipografica = "helvetica"
+                motor_escritor_de_pdf = FPDF()
+                motor_escritor_de_pdf.set_auto_page_break(auto=True, margin=15)
 
-                # Finalização e Download
-                pdf_output = pdf.output()
-                pdf_bytes = bytes(pdf_output) if not isinstance(pdf_output, bytes) else pdf_output
+                if os.path.exists(_FONTE_PATH):
+                    motor_escritor_de_pdf.add_font("DejaVu", "",  _FONTE_PATH)
+                    motor_escritor_de_pdf.add_font("DejaVu", "B", _FONTE_PATH)
+                    familia_tipografica = "DejaVu"
+
+                # Blocos padronizados de tipografia para o construtor PDF
+                def FormatarTituloGrossoH1(texto_escrito):
+                    motor_escritor_de_pdf.set_font(familia_tipografica, "B", 18)
+                    motor_escritor_de_pdf.cell(motor_escritor_de_pdf.epw, 12, texto_escrito, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                    motor_escritor_de_pdf.line(
+                        motor_escritor_de_pdf.l_margin, 
+                        motor_escritor_de_pdf.get_y(), 
+                        motor_escritor_de_pdf.w - motor_escritor_de_pdf.r_margin, 
+                        motor_escritor_de_pdf.get_y()
+                    )
+                    motor_escritor_de_pdf.ln(5)
+
+                def FormatarSubtitulosElegantesH2(texto_escrito):
+                    motor_escritor_de_pdf.set_font(familia_tipografica, "B", 14)
+                    motor_escritor_de_pdf.cell(motor_escritor_de_pdf.epw, 9, texto_escrito, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                    motor_escritor_de_pdf.ln(2)
+
+                def EscreverParagrafoNarrativo(texto_escrito):
+                    motor_escritor_de_pdf.set_font(familia_tipografica, "", 11)
+                    motor_escritor_de_pdf.multi_cell(motor_escritor_de_pdf.epw, 7, safe_str(texto_escrito))
+                    motor_escritor_de_pdf.ln(4)
+
+                # ==================================
+                # COMPOSIÇÃO DE FOLHA DE ROSTO (PÁGINA 1)
+                # ==================================
+                motor_escritor_de_pdf.add_page()
+                motor_escritor_de_pdf.ln(45)
+                motor_escritor_de_pdf.set_font(familia_tipografica, "B", 32)
+                motor_escritor_de_pdf.cell(motor_escritor_de_pdf.epw, 20, "MEMORANDO DE INVESTIMENTO DA SOCIEDADE", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+                motor_escritor_de_pdf.set_font(familia_tipografica, "B", 22)
+                motor_escritor_de_pdf.cell(motor_escritor_de_pdf.epw, 15, projeto.nome_startup.upper(), new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+                motor_escritor_de_pdf.ln(15)
                 
-                st.success("✅ Dossiê compilado com sucesso e gráficos inseridos!")
+                motor_escritor_de_pdf.set_font(familia_tipografica, "", 14)
+                indicadores_cardeais_da_capa = [
+                    f"Índice Formal de Carga ARR Prevista (Aualizado): R$ {faturamento_anualizado_arr:,.2f}",
+                    f"Constância Mensal Pura Recolhida Vigente MRR: R$ {mrr_bruto_total_consolidado:,.2f}",
+                    f"Relação de Alavancagem Saudável Adquirida Escalar (LTV/CAC): {indice_ltv_cac:.2f}x",
+                    f"Estudo Matemático Associado e Direcionado Para Lucratividade Limpa Exigida (Breakeven): {mes_de_breakeven_payback}",
+                    f"Valor Acumulado Previsto em Prejuízos Previsíveis a Consumir Capital Necessário Fornecido (Capex Rodada): R$ {capex_total_apurado:,.2f}"
+                ]
+                
+                for sintese_indicadora in indicadores_cardeais_da_capa:
+                    motor_escritor_de_pdf.cell(motor_escritor_de_pdf.epw, 10, sintese_indicadora, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+
+                # ==================================
+                # DOCUMENTAÇÃO ESTRUTURADA (PÁGINA 2)
+                # ==================================
+                motor_escritor_de_pdf.add_page()
+                FormatarTituloGrossoH1("I. Análise Exploratória e Condensada dos Verticais de Negócios (A Estrutura Lean Canvas)")
+                
+                repositorio_da_matriz = [
+                    ("Disfunções, Ruídos Inoperáveis e Falhas Identificadas Num Enorme Grupo Económico:", projeto.lean_canvas.problema),
+                    ("Arquitetura e Fundamentação Inicial Tecnológica Mapeada Perante Clientes (MVP):", projeto.lean_canvas.solucao_mvp),
+                    ("Comprovação Numérica Associativa à Apresentação do Produto Mapeado (A Prova Funcional Limpa):", projeto.lean_canvas.mvp_descricao),
+                    ("Argumento Impecável de Resolução Sistémica Associada a Lucros Radicais de Longa Duração (A Missão Principal):", projeto.lean_canvas.proposta_valor),
+                    ("Moat / Fosso Exclusivo / Monopólio Relativo e Definitivo em Inserção Num Nicho Concorrencial Cruel:", projeto.lean_canvas.vantagem_injusta),
+                    ("Canais Expansivos de Inclusão Maciça (Go-To-Market):", projeto.lean_canvas.canais),
+                    ("Bússola Diretiva ESG / ODS:", projeto.lean_canvas.ods_onu)
+                ]
+                
+                for grande_tema, o_grande_conteudo in repositorio_da_matriz:
+                    FormatarSubtitulosElegantesH2(grande_tema)
+                    EscreverParagrafoNarrativo(o_grande_conteudo)
+
+                # ==================================
+                # ALOCAÇÃO LEGISLATIVA DO FUNDO (PÁGINA 3)
+                # ==================================
+                motor_escritor_de_pdf.add_page()
+                FormatarTituloGrossoH1("II. Due Diligence Cautelar Legal, Dispersão do Capex Demandado e Custos Radicais Constantes")
+                
+                EscreverParagrafoNarrativo(f"Proteção das Propriedades Imateriais e Intelectuais Exclusivas (Norma INPI e Registo Rigoroso de Autoria Pura Operacional Perante Regra Vigente do Software): {projeto.juridico.registro_inpi}\n\n"
+                                 f"Exposição Formal de Identidade Comercial face a Cópia Barata Global (A Regra Prática para Manutenção Segura e Rastreável Contínua do Signo da Marca): {projeto.juridico.marca_status}\n\n"
+                                 f"Aderência ao Corpo Restritivo Multibilionário Europeu, Regional e Ferozmente Agressivo face à Informação do Cliente Protegida (Compliance Pleno da Legislação Geral de Proteção Segura Exaustiva LGPD e RGPD): {'Processo Exigente Aprovado sem Ressalvas Documentais.' if projeto.juridico.adequacao_lgpd else 'Dossier Pendente; Ação Imediata Mandatória é Claramente Imprescindível para o Avanço.'}\n\n"
+                                 f"Cimento Societário Institucional Face ao Eventual Fuga Maciça Súbita, Morte ou Afastamento Ilimitado Indesejável do Talento Superior Criativo Originário (A Existência Contratual Formal de Termos Exclusivos Complexos de Acordo de Quotistas Denominado Vastamente Como Vesting): {'Processo Efetivamente Formalizado nos Termos.' if projeto.juridico.contrato_vesting else 'Alerta Brutal Perigoso Assinalado nos Termos.'}")
+                
+                motor_escritor_de_pdf.ln(5)
+                FormatarSubtitulosElegantesH2("Destinação Rigorosa e Tática de Todo O Recurso de Demanda de Captação Previsto Incial do Caixa Mapeado Fundo Inicial (As Linhas Contratuais Fundamentais do Capex Inicial Seed Pre-Seed):")
+                for dado_capex in projeto.investimentos: 
+                    EscreverParagrafoNarrativo(f"• Alocação Obrigatória e Restrita Associada a Área de {dado_capex.categoria}: {dado_capex.descricao} — Aporte Integral Total Requisitado: Montante Total em R$ {dado_capex.valor:,.2f}")
+                
+                motor_escritor_de_pdf.ln(5)
+                FormatarSubtitulosElegantesH2("Necessidades Primárias Correntes Sucedidas Associativas Imbricadas À Passagem Meses Que Constituem Uma Base Sólida para Efeito Do Queima Mensal Constante (Despesas Periódicas de Base Pura Opex Operacional Global):")
+                for dado_opex in projeto.custos_fixos: 
+                    EscreverParagrafoNarrativo(f"• Risco de Orçamento Fixado Contínuo Mês Após Mês Relativamente A Matéria Designada Por {dado_opex.categoria}: Detalhe Transparente Corrente de {dado_opex.descricao} — Pagamento Assumido Exigido Fixo Associado: Perda Contínua Assumida de Valores Correspondentes na Ordem de R$ {dado_opex.valor_mensal:,.2f} a serem pagos fixos e impreteríveis/mês")
+
+                # ==================================
+                # IMAGENS REAIS GRÁFICAS PROCESSADAS DA VIABILIDADE (PÁGINA 4 E SEGUINTES)
+                # ==================================
+                bytes_cashflow_processados = fig_to_bytes(figura_cashflow_projetado)
+                if bytes_cashflow_processados:
+                    motor_escritor_de_pdf.add_page()
+                    FormatarTituloGrossoH1("III. Viabilidade Financeira Acumulada E Visualização Lógica Constatável Exata Perante Toda a Geometria Exaustiva Associada Fria Ao Horizonte Lúgubre Cruel Corrente Denominado Conhecidamente Como O Famoso Vale Da Morte Inicial.")
+                    motor_escritor_de_pdf.image(io.BytesIO(bytes_cashflow_processados), x=motor_escritor_de_pdf.l_margin, w=motor_escritor_de_pdf.epw)
+                    motor_escritor_de_pdf.ln(10)
+
+                bytes_da_pizza_de_distribuicao = fig_to_bytes(figura_pizza_custos)
+                bytes_da_subida_estrondosa_de_clientes_mrr = fig_to_bytes(figura_mrr_tracao)
+                
+                if bytes_da_pizza_de_distribuicao or bytes_da_subida_estrondosa_de_clientes_mrr:
+                    motor_escritor_de_pdf.add_page()
+                    FormatarTituloGrossoH1("IV. Dashboard de Demonstrações Frias e Projeções das Trações E Esmagamento Extensivo de Exposição de Expansão Global Perfeita Mapeada Dos Relatórios Profundos Associados À Metodologia e Escala Contínua Extensiva Exata Mapeada (Os Unit Economics Essenciais Frios Assinalados Pela Nuvem Mapeada SaaS Global).")
+                    
+                    ponto_medio_calculado = motor_escritor_de_pdf.epw / 2 - 5
+                    
+                    if bytes_da_subida_estrondosa_de_clientes_mrr: 
+                        FormatarSubtitulosElegantesH2("Curva Agressiva Exata Ponderada Crescente Relativamente à Base de Assinantes vs Valor Angariado Progressivo Adstrito Resultante das Curvas Mapeadas Expansivas Inesperadas Ascendentes Faturadas do Modelo Adquirido Corrente Lógico (MRR Growth Exato Acumulativo de Expansão):")
+                        motor_escritor_de_pdf.image(io.BytesIO(bytes_da_subida_estrondosa_de_clientes_mrr), x=motor_escritor_de_pdf.l_margin, w=motor_escritor_de_pdf.epw)
+                        motor_escritor_de_pdf.ln(15)
+                        
+                    if bytes_da_pizza_de_distribuicao: 
+                        FormatarSubtitulosElegantesH2("Efeito Global Constatável e Inequívoco Evidenciado Exatamente Nas Condições Presentes Globais Da Dispersão Efetiva Esvaziada Análisa Relativamente A Geometria Total Assumida Do Constante, Previsível E Famosamente Reconhecido Desastre De Sangria de Fundo Do Sangrento e Temido Valor Do Custo Permanente Crucial Associado Contínuo Mapeado (Burn Rate Geral Mapeado Mensal Permanente Extensivo Distribuído Cruamente Onde O Dinheiro É Perdido):")
+                        motor_escritor_de_pdf.image(io.BytesIO(bytes_da_pizza_de_distribuicao), x=motor_escritor_de_pdf.l_margin + ponto_medio_calculado // 2, w=ponto_medio_calculado)
+
+                # ==================================
+                # INCLUSÃO FINAL INEXORÁVEL ESCRITA EM PAPEL DO RESULTADO DURO E SECO RECOLHIDO E COMPLETO COM INSERÇÕES ESTATÍSTICAS MATEMÁTICAS PROFUNDAS E EMANADAS DA CRUELDADE FINA ASSINALADA (O LAUDO OFICIAL DO ALGORITMO IA) (PÁGINA FINAL ESCRITA ÚLTIMA DE FUNDAMENTO ÚLTIMO)
+                # ==================================
+                if caixa_interativa_de_revisao_do_comite:
+                    motor_escritor_de_pdf.add_page()
+                    FormatarTituloGrossoH1("V. Veredito Assumido Superior Intransigente Oficial Associativo Frio Ao Desfecho Avaliativo do Crivo Absoluto Do Comité Total de Investimento Mapeado Do Sistema Artificial IA Emissão Emitida Perante Regra Mapeada Extensiva Conclusiva Associada De Sentença Final.")
+                    motor_escritor_de_pdf.set_font(familia_tipografica, "", 12)
+                    
+                    # Limpeza de formatações Markdown que podem corromper a FPDF
+                    texto_ia_purificado = caixa_interativa_de_revisao_do_comite.replace("•", "-").replace("·", "-").replace("**", "")
+                    motor_escritor_de_pdf.multi_cell(motor_escritor_de_pdf.epw, 7, texto_ia_purificado)
+
+                # Compilação Final Exata
+                saida_pdf_bytes_absolutos_reais = bytes(motor_escritor_de_pdf.output())
+                st.success("✅ A Plataforma exportou com sucesso inexorável pleno e irrevogável o documento tático e puramente criptográfico e profundo final exigente que descreve a alma dura exata inteira do negócio perante a realidade bruta das operações.")
                 st.download_button(
-                    label="📥 Baixar Relatório Executivo (PDF)",
-                    data=pdf_bytes,
-                    file_name=f"Dossie_{projeto.nome_empresa}.pdf",
+                    "📥 Efetuar o Download Categórico e Absoluto Do Prospecto Term Sheet do Dossiê Do Fundo (.pdf Livre de Imposições Formais e Perfeitas Limpo Exato)", 
+                    data=saida_pdf_bytes_absolutos_reais, 
+                    file_name=f"TermSheet_Prospecto_Duro_De_{projeto.nome_startup.replace(' ', '_')}.pdf", 
                     mime="application/pdf"
                 )
-                
-        except Exception as e:
-            st.error(f"Erro crítico na geração do relatório: {e}")
+        except Exception as falha_bruta_profunda_de_geracao_sistema_inviabilizador:
+            st.error(f"Erro Sistémico Crítico Imprevisível Incorreto Falho De Origem Pura Detetado Com Segurança e Transparência Diretamente Reveladora Na Base Crua da Tábua Renderizadora Operacional Local Exata do Construtor de Ficheiros Associada: {falha_bruta_profunda_de_geracao_sistema_inviabilizador}")

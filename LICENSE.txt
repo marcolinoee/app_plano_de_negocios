@@ -1,0 +1,18 @@
+ACADEMIC AND NON-COMMERCIAL LICENSE AGREEMENT
+
+Copyright (c) 2026, [SEU NOME / NOME DA INSTITUIÇÃO]
+Todos os direitos reservados.
+
+O código-fonte deste repositório ("Master Management VC Edition") é disponibilizado estritamente para fins EDUCACIONAIS e ACADÉMICOS.
+
+É CONCEDIDA permissão para:
+1. Fazer o download, ler e executar o software em ambiente local.
+2. Utilizar a plataforma como ferramenta de apoio à disciplina de Empreendedorismo e TIC.
+3. Modificar o código para fins de estudo individual.
+
+É ESTRITAMENTE PROIBIDO:
+1. Utilizar este software, ou partes do seu código, para fins comerciais, lucrativos ou em empresas reais.
+2. Redistribuir, sublicenciar ou vender este software.
+3. Remover os avisos de direitos de autor do código-fonte.
+
+O software é fornecido "no estado em que se encontra" (AS IS), sem qualquer garantia de qualquer tipo. A autoria intelectual pertence exclusivamente ao seu criador original.

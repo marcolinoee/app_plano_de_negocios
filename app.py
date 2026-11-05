@@ -8,6 +8,7 @@
 # na disciplina de Empreendedorismo/TIC.
 # =============================================================================
 
+import gc
 import sys
 import io
 import os
@@ -28,17 +29,94 @@ try:
 except ImportError:
     GEMINI_AVAILABLE = False
 
-# ── Modelos do Banco de Dados ─────────────────────────────────────────────────
+# ── Modelos do Banco de Dados e Núcleo Multi-Tenant SaaS ──────────────────────
 from banco_dados import (
-    session, 
-    ProjetoDB, 
-    LeanCanvasDB, 
-    PremissasStartupDB,
-    InvestimentoDB, 
-    CustoFixoDB, 
-    PlanoSaaSDB, 
-    JuridicoDB
+    engine as _engine_local,
+    session as _legacy_session,
+    ProjetoDB,
 )
+from backend import (
+    AnaliseIAEBT,
+    AssinaturaTenant,
+    ClienteEBT,
+    ErroIsolamentoTenant,
+    ErroLimitePlanoSaaS,
+    ErroPermissaoRBAC,
+    ItemCapexEBT,
+    ItemOpexEBT,
+    JobAssincronoSaaS,
+    JuridicoEBT,
+    LeanCanvasEBT,
+    Membership,
+    PapelMembro,
+    PermissaoSaaS,
+    PlanoAssinaturaCodigo,
+    PlanoSaaSEBT,
+    PremissasEBT,
+    ProvedorAuditoriaDeterministicoIA,
+    ProvedorGeminiIA,
+    RelatorioDossieEBT,
+    ResultadoSimulacaoEBT,
+    StorageDossieLocal,
+    Tenant,
+    User,
+    VersaoPremissasEBT,
+    alterar_plano_assinatura_tenant,
+    atualizar_premissas_ebt,
+    construir_prompt_vc_governado,
+    criar_engine_saas,
+    criar_link_compartilhamento_investidor,
+    criar_tenant_consultoria,
+    criar_workspace_ebt,
+    executar_e_versionar_simulacao_ebt,
+    gerar_ddl_rls_postgresql,
+    inicializar_banco_saas,
+    listar_jobs_tenant,
+    listar_trilha_auditoria,
+    listar_workspaces_ebt_visiveis,
+    obter_ou_criar_uso_mensal,
+    registrar_emissao_dossie_pdf,
+    registrar_evento_auditoria,
+    revisar_e_aprovar_parecer_ia,
+    sanitizar_pii_texto,
+    solicitar_parecer_ia_governado,
+    validar_token_investidor,
+    verificar_permissao_rbac,
+)
+from core_financeiro import (
+    EntradaSimulacaoSaaS,
+    SeveridadeAlerta,
+    TipoCenario,
+    executar_simulacao_saas,
+    simular_cenarios_padrao,
+    simular_monte_carlo,
+)
+
+@st.cache_resource
+def _obter_session_factory_saas_v3():
+    try:
+        _legacy_session.rollback()
+        _legacy_session.close()
+    except Exception:
+        pass
+    gc.collect()
+    _engine_local.dispose()
+    db_url_env = os.getenv("DATABASE_URL")
+    if db_url_env:
+        engine_alvo = criar_engine_saas(db_url_env)
+        return inicializar_banco_saas(engine_alvo, classe_projeto_legado=None)
+    return inicializar_banco_saas(_engine_local, classe_projeto_legado=ProjetoDB)
+
+if "_db_session_ativa" in st.session_state:
+    try:
+        st.session_state["_db_session_ativa"].rollback()
+        st.session_state["_db_session_ativa"].close()
+    except Exception:
+        pass
+gc.collect()
+_SESSION_FACTORY_SAAS = _obter_session_factory_saas_v3()
+session = _SESSION_FACTORY_SAAS()
+st.session_state["_db_session_ativa"] = session
 
 # =============================================================================
 # FUNÇÕES UTILITÁRIAS E DE SEGURANÇA
@@ -207,24 +285,134 @@ if "parecer_ia" not in st.session_state:
     st.session_state["parecer_ia"] = ""
 
 # =============================================================================
-# SIDEBAR — GERENCIADOR DE PORTFÓLIO (CRUD)
+# SIDEBAR — GERENCIADOR MULTI-TENANT (CONSULTORIA, RBAC & WORKSPACES EBT)
 # =============================================================================
 with st.sidebar:
     safe_image(
         "https://images.unsplash.com/photo-1555066931-4365d14bab8c?q=80&w=1000&auto=format&fit=crop", 
         width="stretch"
     )
-    st.title("📂 Startups em Análise")
+    st.title("🏢 Núcleo Multi-Tenant SaaS")
 
-    # 1. Leitura Inicial (Read)
-    todos_projetos = session.query(ProjetoDB).all()
+    # 1. Seleção da Consultoria (Tenant)
+    session.info["bypass_rls"] = True
+    todos_tenants = session.query(Tenant).filter(Tenant.ativo.is_(True)).order_by(Tenant.criado_em.asc()).all()
+
+    if "tenant_atual_id" not in st.session_state or st.session_state["tenant_atual_id"] not in [t.id for t in todos_tenants]:
+        st.session_state["tenant_atual_id"] = todos_tenants[0].id
+
+    opcoes_tenants = {t.id: f"{t.nome} ({t.slug})" for t in todos_tenants}
+    tenant_selecionado_id = st.selectbox(
+        "Consultoria (Tenant):",
+        options=list(opcoes_tenants.keys()),
+        format_func=lambda tid: opcoes_tenants[tid],
+        index=list(opcoes_tenants.keys()).index(st.session_state["tenant_atual_id"]),
+    )
+    if tenant_selecionado_id != st.session_state["tenant_atual_id"]:
+        st.session_state["tenant_atual_id"] = tenant_selecionado_id
+        st.session_state.pop("membership_atual_id", None)
+        st.session_state.pop("projeto_atual_id", None)
+        st.session_state["parecer_ia"] = ""
+        st.rerun()
+
+    tenant_ativo = session.get(Tenant, st.session_state["tenant_atual_id"])
+    assinatura_ativa = (
+        session.query(AssinaturaTenant)
+        .filter(AssinaturaTenant.tenant_id == tenant_ativo.id)
+        .first()
+    )
+
+    # 2. Seleção de Perfil de Acesso (RBAC)
+    memberships_do_tenant = (
+        session.query(Membership)
+        .filter(Membership.tenant_id == tenant_ativo.id, Membership.ativo.is_(True))
+        .all()
+    )
+    if "membership_atual_id" not in st.session_state or st.session_state["membership_atual_id"] not in [m.id for m in memberships_do_tenant]:
+        st.session_state["membership_atual_id"] = memberships_do_tenant[0].id
+
+    opcoes_memberships = {}
+    for m in memberships_do_tenant:
+        usr = session.get(User, m.user_id)
+        nome_usr = usr.nome_completo if usr else m.user_id[:8]
+        opcoes_memberships[m.id] = f"[{m.papel.upper()}] {nome_usr}"
+
+    membership_selecionada_id = st.selectbox(
+        "🔐 Papel RBAC Ativo:",
+        options=list(opcoes_memberships.keys()),
+        format_func=lambda mid: opcoes_memberships[mid],
+        index=list(opcoes_memberships.keys()).index(st.session_state["membership_atual_id"]),
+    )
+    if membership_selecionada_id != st.session_state["membership_atual_id"]:
+        st.session_state["membership_atual_id"] = membership_selecionada_id
+        st.rerun()
+
+    membership_ativa = session.get(Membership, st.session_state["membership_atual_id"])
+
+    # Ativa o isolamento RLS por Tenant na sessão a partir deste ponto
+    session.info["bypass_rls"] = False
+    session.info["tenant_id"] = tenant_ativo.id
+    session.info["user_id"] = membership_ativa.user_id
+
+    if assinatura_ativa:
+        total_ebts_tenant = session.query(ClienteEBT).filter(ClienteEBT.ativo.is_(True)).count()
+        st.caption(
+            f"📦 Plano **{assinatura_ativa.plano_codigo.upper()}** · "
+            f"EBTs: **{total_ebts_tenant}/{assinatura_ativa.limite_ebts}** · "
+            f"Papel: **`{membership_ativa.papel}`**"
+        )
+
+    with st.expander("➕ Nova Consultoria (Onboarding Tenant)"):
+        with st.form("form_novo_tenant", clear_on_submit=True):
+            nome_nova_cons = st.text_input("Nome da Consultoria")
+            slug_nova_cons = st.text_input("Identificador (slug, ex: nordeste-vc)")
+            email_dono_cons = st.text_input("E-mail do Dono", value="diretor@consultoria.com")
+            plano_nova_cons = st.selectbox(
+                "Plano SaaS",
+                options=[
+                    PlanoAssinaturaCodigo.FREE,
+                    PlanoAssinaturaCodigo.STARTER,
+                    PlanoAssinaturaCodigo.PRO,
+                    PlanoAssinaturaCodigo.ENTERPRISE,
+                ],
+                format_func=lambda p: "FREE (Gratuito)" if p == PlanoAssinaturaCodigo.FREE else p.value.upper(),
+                index=0,
+            )
+            btn_criar_tenant = st.form_submit_button("Criar Consultoria")
+            if btn_criar_tenant and nome_nova_cons and slug_nova_cons:
+                try:
+                    session.info["bypass_rls"] = True
+                    novo_t, _, novo_m = criar_tenant_consultoria(
+                        session,
+                        nome_consultoria=nome_nova_cons,
+                        slug=slug_nova_cons,
+                        email_dono=email_dono_cons,
+                        nome_dono=f"Dono {nome_nova_cons}",
+                        plano=plano_nova_cons,
+                    )
+                    criar_workspace_ebt(
+                        session,
+                        membership=novo_m,
+                        nome_startup=f"Primeira EBT - {nome_nova_cons}",
+                    )
+                    session.commit()
+                    st.session_state["tenant_atual_id"] = novo_t.id
+                    st.session_state["membership_atual_id"] = novo_m.id
+                    st.session_state.pop("projeto_atual_id", None)
+                    st.success("Consultoria criada com sucesso!")
+                    st.rerun()
+                except Exception as exc_tenant:
+                    session.rollback()
+                    st.error(f"Erro ao criar consultoria: {exc_tenant}")
+
+    st.markdown("---")
+    st.subheader("📂 Workspaces EBT")
+
+    # 3. Leitura das EBTs visíveis conforme escopo RBAC
+    todos_projetos = listar_workspaces_ebt_visiveis(session, membership=membership_ativa)
     if not todos_projetos:
-        novo_projeto = ProjetoDB(nome_startup="Nova Startup TIC")
-        session.add(novo_projeto)
-        session.commit()
-        todos_projetos = [novo_projeto]
+        todos_projetos = session.query(ClienteEBT).all()
 
-    # 2. Definição Segura do Projeto Ativo
     if "projeto_atual_id" not in st.session_state:
         st.session_state["projeto_atual_id"] = todos_projetos[0].id
 
@@ -232,38 +420,43 @@ with st.sidebar:
     if st.session_state["projeto_atual_id"] not in ids_existentes:
         st.session_state["projeto_atual_id"] = ids_existentes[0]
 
-    # 3. Caixa de Seleção de Projetos
     opcoes_projetos = {p.id: p.nome_startup for p in todos_projetos}
     projeto_selecionado_id = st.selectbox(
-        "Startup Ativa:", 
+        "Startup (Workspace EBT):", 
         options=list(opcoes_projetos.keys()), 
         format_func=lambda x: opcoes_projetos[x], 
         index=list(opcoes_projetos.keys()).index(st.session_state["projeto_atual_id"])
     )
     
-    # 4. Gatilho de Troca de Projeto
     if projeto_selecionado_id != st.session_state["projeto_atual_id"]:
         st.session_state["projeto_atual_id"] = projeto_selecionado_id
-        st.session_state["parecer_ia"] = ""  # Limpa o feedback da IA antiga
+        st.session_state["parecer_ia"] = ""
         st.rerun()
 
     st.markdown("---")
 
-    # 5. Criar Novo Projeto (Create)
+    # 4. Criar Novo Workspace EBT (com validação RBAC e Limite de Plano)
     with st.form("form_novo_proj", clear_on_submit=True):
-        novo_nome_startup = st.text_input("Nome da Nova Operação")
+        novo_nome_startup = st.text_input("Nome da Nova Operação (EBT)")
         botao_nova_startup = st.form_submit_button("➕ Criar Startup")
         
         if botao_nova_startup and novo_nome_startup:
-            nova_startup = ProjetoDB(nome_startup=novo_nome_startup)
-            session.add(nova_startup)
-            session.commit()
-            st.session_state["projeto_atual_id"] = nova_startup.id
-            st.session_state["parecer_ia"] = ""
-            st.success("Startup criada com sucesso!")
-            st.rerun()
+            try:
+                nova_startup = criar_workspace_ebt(
+                    session,
+                    membership=membership_ativa,
+                    nome_startup=novo_nome_startup,
+                )
+                session.commit()
+                st.session_state["projeto_atual_id"] = nova_startup.id
+                st.session_state["parecer_ia"] = ""
+                st.success("Workspace EBT criado e auditado com sucesso!")
+                st.rerun()
+            except (ErroPermissaoRBAC, ErroLimitePlanoSaaS) as erro_negocio:
+                session.rollback()
+                st.error(f"🔒 Bloqueado: {erro_negocio}")
 
-    # 6. Renomear e Excluir (Update / Delete)
+    # 5. Renomear e Excluir (Update / Delete)
     with st.expander("✏️ Renomear / 🗑️ Excluir"):
         with st.form("form_renomear"):
             nome_editado = st.text_input(
@@ -273,24 +466,64 @@ with st.sidebar:
             botao_renomear = st.form_submit_button("Salvar Alteração")
             
             if botao_renomear and nome_editado:
-                projeto_para_editar = session.get(ProjetoDB, st.session_state["projeto_atual_id"])
-                projeto_para_editar.nome_startup = nome_editado
-                session.commit()
-                st.rerun()
+                try:
+                    verificar_permissao_rbac(
+                        membership_ativa,
+                        PermissaoSaaS.EBT_EDITAR_DIAGNOSTICO,
+                        ebt_alvo_id=st.session_state["projeto_atual_id"],
+                    )
+                    projeto_para_editar = session.get(ClienteEBT, st.session_state["projeto_atual_id"])
+                    nome_antigo = projeto_para_editar.nome_startup
+                    projeto_para_editar.nome_startup = nome_editado
+                    registrar_evento_auditoria(
+                        session,
+                        tenant_id=tenant_ativo.id,
+                        user_id=membership_ativa.user_id,
+                        acao="ebt.renomear",
+                        entidade_tipo="ClienteEBT",
+                        entidade_id=projeto_para_editar.id,
+                        resumo=f"EBT renomeada de '{nome_antigo}' para '{nome_editado}'.",
+                        dados_anteriores={"nome_startup": nome_antigo},
+                        dados_novos={"nome_startup": nome_editado},
+                    )
+                    session.commit()
+                    st.rerun()
+                except ErroPermissaoRBAC as erro_rbac:
+                    session.rollback()
+                    st.error(f"🔒 {erro_rbac}")
                 
         st.warning("Aviso: A exclusão é permanente e destrói o valuation do banco de dados.")
         botao_excluir = st.button("Excluir Startup", type="primary")
         
         if botao_excluir:
-            if len(todos_projetos) > 1:
-                projeto_para_deletar = session.get(ProjetoDB, st.session_state["projeto_atual_id"])
-                session.delete(projeto_para_deletar)
-                session.commit()
-                st.session_state["projeto_atual_id"] = session.query(ProjetoDB).all()[0].id
-                st.session_state["parecer_ia"] = ""
-                st.rerun()
-            else:
-                st.error("Erro Crítico: Não é possível excluir a última startup da base de dados.")
+            try:
+                verificar_permissao_rbac(
+                    membership_ativa,
+                    PermissaoSaaS.EBT_EXCLUIR,
+                    ebt_alvo_id=st.session_state["projeto_atual_id"],
+                )
+                if len(todos_projetos) > 1:
+                    projeto_para_deletar = session.get(ClienteEBT, st.session_state["projeto_atual_id"])
+                    registrar_evento_auditoria(
+                        session,
+                        tenant_id=tenant_ativo.id,
+                        user_id=membership_ativa.user_id,
+                        acao="ebt.excluir",
+                        entidade_tipo="ClienteEBT",
+                        entidade_id=projeto_para_deletar.id,
+                        resumo=f"Workspace EBT '{projeto_para_deletar.nome_startup}' excluído.",
+                    )
+                    session.delete(projeto_para_deletar)
+                    session.commit()
+                    restantes = listar_workspaces_ebt_visiveis(session, membership=membership_ativa)
+                    st.session_state["projeto_atual_id"] = restantes[0].id
+                    st.session_state["parecer_ia"] = ""
+                    st.rerun()
+                else:
+                    st.error("Erro Crítico: Não é possível excluir a última startup visível.")
+            except ErroPermissaoRBAC as erro_rbac:
+                session.rollback()
+                st.error(f"🔒 {erro_rbac}")
 
     st.markdown("---")
     st.subheader("🔌 Sistema Local")
@@ -301,21 +534,31 @@ with st.sidebar:
 
 # =============================================================================
 # INICIALIZAÇÃO DE INTEGRIDADE RELACIONAL 
-# (Garante que as tabelas de 1:1 existam)
+# (Garante que as tabelas de 1:1 existam para o Workspace EBT)
 # =============================================================================
-projeto = session.get(ProjetoDB, st.session_state["projeto_atual_id"])
+projeto = session.get(ClienteEBT, st.session_state["projeto_atual_id"])
 
 def garantir_relacionamento(atributo, classe_modelo):
-    """Verifica e cria os registos filhos caso não existam para o projeto."""
+    """Verifica e cria os registos filhos caso não existam para o workspace EBT."""
     if not getattr(projeto, atributo):
-        novo_registo = classe_modelo(projeto_id=projeto.id)
+        novo_registo = classe_modelo(tenant_id=tenant_ativo.id, ebt_id=projeto.id)
         session.add(novo_registo)
         session.commit()
         session.refresh(projeto)
 
-garantir_relacionamento("lean_canvas", LeanCanvasDB)
-garantir_relacionamento("premissas", PremissasStartupDB)
-garantir_relacionamento("juridico", JuridicoDB)
+garantir_relacionamento("lean_canvas", LeanCanvasEBT)
+garantir_relacionamento("premissas", PremissasEBT)
+garantir_relacionamento("juridico", JuridicoEBT)
+
+pode_editar_diagnostico = True
+try:
+    verificar_permissao_rbac(
+        membership_ativa,
+        PermissaoSaaS.EBT_EDITAR_DIAGNOSTICO,
+        ebt_alvo_id=projeto.id,
+    )
+except ErroPermissaoRBAC:
+    pode_editar_diagnostico = False
 
 # =============================================================================
 # CABEÇALHO DO APLICATIVO
@@ -330,180 +573,65 @@ with col_logo:
 
 with col_titulo:
     st.title(f"Startup: {projeto.nome_startup}")
-    st.caption("Master Management v8.5 — Venture Capital & Due Diligence Edition")
+    st.caption(
+        f"Master Management SaaS — Consultoria: **{tenant_ativo.nome}** · "
+        f"Papel RBAC: **`{membership_ativa.papel.upper()}`** "
+        f"{'🔒 (Modo Somente Leitura)' if not pode_editar_diagnostico else '✏️ (Edição Habilitada)'}"
+    )
     
 st.markdown("---")
 
 # =============================================================================
-# ⚙️ MOTOR MATEMÁTICO E FINANCEIRO (SAAS & UNIT ECONOMICS)
-# Processado antes das abas para garantir que os dados globais estejam
-# acessíveis em todas as visualizações e relatórios.
+# ⚙️ MOTOR MATEMÁTICO E FINANCEIRO PURO (CORE_FINANCEIRO — FASE 0 SAAS)
+# Processado via pacote isolado Pydantic antes das abas para garantir
+# determinismo, versionamento e validações de sanidade.
 # =============================================================================
 premissas_atuais = projeto.premissas
 
-# 1. Agrupamento de Custos Base (Capex e Opex Fixo)
-capex_total_apurado = sum(investimento.valor for investimento in projeto.investimentos)
-opex_fixo_mensal = sum(custo.valor_mensal for custo in projeto.custos_fixos) + projeto.juridico.custo_estimado_legal
+entrada_simulacao = EntradaSimulacaoSaaS.from_orm_projeto(projeto)
+resultado_simulacao = executar_simulacao_saas(entrada_simulacao)
+comparativo_cenarios = simular_cenarios_padrao(entrada_simulacao)
 
-# 2. Funil Freemium e Utilizadores Base
-usuarios_pagos_diretos = sum(plano.usuarios_ativos_base for plano in projeto.planos_saas)
-taxa_conversao_freemium_decimal = premissas_atuais.conversao_freemium_pct / 100.0
+# Mapeamento das saídas tipadas do motor puro para as variáveis consumidas pelas abas e PDF
+capex_total_apurado = resultado_simulacao.viabilidade.capex_total
+opex_fixo_mensal = resultado_simulacao.dre_base.opex_fixo_mensal
 
-# Quantidade de utilizadores que convertem da base gratuita para a base paga
-conversos_pagantes_freemium = int(premissas_atuais.usuarios_freemium_base * taxa_conversao_freemium_decimal)
+usuarios_pagos_diretos = resultado_simulacao.unit_economics.usuarios_pagos_diretos
+conversos_pagantes_freemium = resultado_simulacao.unit_economics.conversos_pagantes_freemium
+usuarios_pagantes_totais_base = resultado_simulacao.unit_economics.usuarios_pagantes_totais_base
 
-# Total absoluto de utilizadores pagantes no momento zero
-usuarios_pagantes_totais_base = usuarios_pagos_diretos + conversos_pagantes_freemium
+mrr_bruto_direto_apurado = resultado_simulacao.dre_base.mrr_bruto_direto
+ticket_medio_arpu = resultado_simulacao.unit_economics.ticket_medio_arpu
+mrr_bruto_total_consolidado = resultado_simulacao.dre_base.mrr_bruto_total
 
-# 3. Cálculo de Faturamento MRR e Ticket Médio
-mrr_bruto_direto_apurado = sum(
-    plano.ticket_mensal * plano.usuarios_ativos_base 
-    for plano in projeto.planos_saas
-)
+media_deducao_impostos_pct = resultado_simulacao.unit_economics.media_deducao_impostos_pct
+media_custo_nuvem_rs = resultado_simulacao.unit_economics.media_custo_nuvem_rs
+despesas_deducoes_base = resultado_simulacao.dre_base.despesas_deducoes_fiscais_gateway
+despesas_nuvem_cogs_base = resultado_simulacao.dre_base.despesas_nuvem_cogs
 
-if usuarios_pagos_diretos > 0:
-    ticket_medio_arpu = mrr_bruto_direto_apurado / usuarios_pagos_diretos
-else:
-    ticket_medio_arpu = 0.0
+mrr_liquido_apurado_base = resultado_simulacao.dre_base.mrr_liquido
+burn_rate_total_mensal = resultado_simulacao.dre_base.burn_rate_total_mensal
+resultado_operacional_ebitda = resultado_simulacao.dre_base.ebitda_mensal
+margem_bruta_percentual = resultado_simulacao.dre_base.margem_bruta_pct
+faturamento_anualizado_arr = resultado_simulacao.dre_base.arr_anualizado
 
-# O MRR total absorve o faturamento dos convertidos do Freemium
-mrr_bruto_total_consolidado = mrr_bruto_direto_apurado + (conversos_pagantes_freemium * ticket_medio_arpu)
+ltv_vitalicio_cliente = resultado_simulacao.unit_economics.ltv_vitalicio_cliente
+cac_aquisicao_mercado = resultado_simulacao.unit_economics.cac_estimado
+indice_ltv_cac = resultado_simulacao.unit_economics.indice_ltv_cac
+meses_payback_cac = resultado_simulacao.unit_economics.meses_payback_cac
 
-# 4. Cálculo de Deduções Variáveis (Médias Ponderadas por Plano)
-if usuarios_pagos_diretos > 0:
-    media_deducao_impostos_pct = sum(
-        (plano.taxas_pagamento_pct + plano.impostos_pct) / 100 * (plano.usuarios_ativos_base / usuarios_pagos_diretos) 
-        for plano in projeto.planos_saas
-    )
-    
-    media_custo_nuvem_rs = sum(
-        plano.custo_servidor_por_usuario * (plano.usuarios_ativos_base / usuarios_pagos_diretos) 
-        for plano in projeto.planos_saas
-    )
-else:
-    media_deducao_impostos_pct = 0.0
-    media_custo_nuvem_rs = 0.0
+lista_fluxo_de_caixa = resultado_simulacao.series_temporais.fluxo_de_caixa_mensal
+lista_rotulos_meses = resultado_simulacao.series_temporais.rotulos_meses
+timeline_usuarios_pagantes = resultado_simulacao.series_temporais.usuarios_pagantes
+timeline_mrr_crescente = resultado_simulacao.series_temporais.mrr_mensal
+timeline_usuarios_freemium = resultado_simulacao.series_temporais.usuarios_freemium
+serie_caixa_acumulado = pd.Series(resultado_simulacao.series_temporais.caixa_acumulado)
 
-# Despesas Financeiras do Mês Zero
-despesas_deducoes_base = mrr_bruto_total_consolidado * media_deducao_impostos_pct
-despesas_nuvem_cogs_base = usuarios_pagantes_totais_base * media_custo_nuvem_rs
-
-# 5. DRE Base e Margens Operacionais
-mrr_liquido_apurado_base = mrr_bruto_total_consolidado - despesas_deducoes_base
-burn_rate_total_mensal = opex_fixo_mensal + despesas_nuvem_cogs_base
-
-resultado_operacional_ebitda = mrr_liquido_apurado_base - burn_rate_total_mensal
-
-if mrr_bruto_total_consolidado > 0:
-    margem_bruta_percentual = ((mrr_liquido_apurado_base - despesas_nuvem_cogs_base) / mrr_bruto_total_consolidado) * 100
-else:
-    margem_bruta_percentual = 0.0
-
-faturamento_anualizado_arr = mrr_bruto_total_consolidado * 12
-
-# 6. Mapeamento de Unit Economics
-taxa_churn_decimal = premissas_atuais.churn_mensal_pct / 100.0
-
-if taxa_churn_decimal > 0:
-    ltv_vitalicio_cliente = ticket_medio_arpu / taxa_churn_decimal
-else:
-    ltv_vitalicio_cliente = 0.0
-
-cac_aquisicao_mercado = premissas_atuais.cac_estimado
-
-if cac_aquisicao_mercado > 0:
-    indice_ltv_cac = ltv_vitalicio_cliente / cac_aquisicao_mercado
-else:
-    indice_ltv_cac = 0.0
-
-# Tempo em meses para a margem de contribuição de um cliente pagar o seu próprio CAC
-if cac_aquisicao_mercado > 0 and ticket_medio_arpu > 0 and (1 - media_deducao_impostos_pct) > 0:
-    meses_payback_cac = cac_aquisicao_mercado / (ticket_medio_arpu * (1 - media_deducao_impostos_pct))
-else:
-    meses_payback_cac = None
-
-# 7. Motor de Simulação Dinâmica (Loop de Crescimento)
-meses_de_horizonte_projecao = premissas_atuais.horizonte_meses
-tma_desconto_mensal = (1 + premissas_atuais.tma_anual_pct / 100) ** (1 / 12) - 1
-taxa_crescimento_organico_mensal = premissas_atuais.crescimento_mensal_pct / 100.0
-
-# Inicialização das listas da linha de tempo
-lista_fluxo_de_caixa = [-capex_total_apurado]
-lista_rotulos_meses = ["Mês 0"]
-
-timeline_usuarios_pagantes = [usuarios_pagantes_totais_base]
-timeline_mrr_crescente = [mrr_bruto_total_consolidado]
-timeline_usuarios_freemium = [float(premissas_atuais.usuarios_freemium_base)]
-
-# Variáveis mutáveis do Loop
-usuarios_ativos_no_loop = float(usuarios_pagantes_totais_base)
-usuarios_freemium_no_loop = float(premissas_atuais.usuarios_freemium_base)
-
-for mes_corrente in range(1, meses_de_horizonte_projecao + 1):
-    
-    # 7.1. Crescimento da Base Freemium (Topo de Funil)
-    usuarios_freemium_no_loop = usuarios_freemium_no_loop * (1 + taxa_crescimento_organico_mensal)
-    
-    # 7.2. Conversão de Gratuitos para Pagos
-    novos_clientes_advindos_do_free = usuarios_freemium_no_loop * taxa_conversao_freemium_decimal
-    
-    # 7.3. Perdas por Cancelamento (Churn) da Base Paga
-    evasao_de_clientes_pagos = usuarios_ativos_no_loop * taxa_churn_decimal
-    
-    # 7.4. Crescimento Orgânico da Base Paga
-    novos_clientes_organicos_pagos = usuarios_ativos_no_loop * taxa_crescimento_organico_mensal
-    
-    # 7.5. Saldo Final de Utilizadores do Mês
-    usuarios_ativos_no_loop = (usuarios_ativos_no_loop 
-                               + novos_clientes_organicos_pagos 
-                               + novos_clientes_advindos_do_free 
-                               - evasao_de_clientes_pagos)
-
-    # 7.6. Faturação do Mês
-    mrr_apurado_no_mes = usuarios_ativos_no_loop * ticket_medio_arpu
-    
-    # 7.7. Custos do Mês
-    deducoes_fiscais_no_mes = mrr_apurado_no_mes * media_deducao_impostos_pct
-    cogs_nuvem_no_mes = usuarios_ativos_no_loop * media_custo_nuvem_rs
-    
-    # 7.8. Resultado Líquido
-    resultado_liquido_mensal = (mrr_apurado_no_mes - deducoes_fiscais_no_mes) - cogs_nuvem_no_mes - opex_fixo_mensal
-
-    # 7.9. Armazenamento na Matriz
-    lista_fluxo_de_caixa.append(resultado_liquido_mensal)
-    lista_rotulos_meses.append(f"Mês {mes_corrente}")
-    
-    timeline_usuarios_pagantes.append(usuarios_ativos_no_loop)
-    timeline_mrr_crescente.append(mrr_apurado_no_mes)
-    timeline_usuarios_freemium.append(usuarios_freemium_no_loop)
-
-# Criação da Série Acumulada do Caixa (Balanço)
-serie_caixa_acumulado = pd.Series(lista_fluxo_de_caixa).cumsum()
-
-# 8. Análise de Viabilidade Financeira a Longo Prazo
-valor_presente_liquido_vpl = npf.npv(tma_desconto_mensal, lista_fluxo_de_caixa)
-
-taxa_interna_retorno_anual = 0.0
-validade_da_tir = False
-
-try:
-    if capex_total_apurado > 0:
-        tir_mensal_bruta = npf.irr(lista_fluxo_de_caixa)
-        if tir_mensal_bruta is not None and not pd.isna(tir_mensal_bruta):
-            taxa_interna_retorno_anual = ((1 + tir_mensal_bruta) ** 12 - 1) * 100
-            validade_da_tir = True
-except Exception:
-    pass
-
-mes_de_breakeven_payback = "O Projeto Não Atinge Breakeven"
-for numero_mes, valor_em_caixa in enumerate(serie_caixa_acumulado):
-    if valor_em_caixa >= 0 and numero_mes > 0:
-        mes_de_breakeven_payback = f"{numero_mes} meses para o Payback"
-        break
-
-meses_runway_sobrevivencia = None
-if resultado_operacional_ebitda < 0 and capex_total_apurado > 0:
-    meses_runway_sobrevivencia = capex_total_apurado / abs(resultado_operacional_ebitda)
+valor_presente_liquido_vpl = resultado_simulacao.viabilidade.valor_presente_liquido_vpl
+taxa_interna_retorno_anual = resultado_simulacao.viabilidade.taxa_interna_retorno_anual_pct
+validade_da_tir = resultado_simulacao.viabilidade.validade_da_tir
+mes_de_breakeven_payback = resultado_simulacao.viabilidade.mes_de_breakeven_payback_texto
+meses_runway_sobrevivencia = resultado_simulacao.viabilidade.meses_runway_sobrevivencia
 
 
 # =============================================================================
@@ -623,7 +751,7 @@ figura_funil_freemium = go.Figure(
 
 
 # =============================================================================
-# ARQUITETURA DE INFORMAÇÃO — 11 ABAS PROFISSIONAIS DE FUNDOS VC
+# ARQUITETURA DE INFORMAÇÃO — 12 ABAS PROFISSIONAIS DE FUNDOS VC + GOVERNANÇA SAAS
 # =============================================================================
 (
     aba_canvas_negocios, 
@@ -636,7 +764,8 @@ figura_funil_freemium = go.Figure(
     aba_viabilidade_vpl, 
     aba_dashboard_unit, 
     aba_mentor_vc, 
-    aba_pdf_export
+    aba_pdf_export,
+    aba_governanca_saas,
 ) = st.tabs([
     "🧩 Lean Canvas", 
     "📈 Premissas", 
@@ -648,7 +777,8 @@ figura_funil_freemium = go.Figure(
     "📊 Viabilidade", 
     "📉 Dashboards",
     "🤖 Comitê VC (IA)", 
-    "🖨️ Data Room (PDF)"
+    "🖨️ Data Room (PDF)",
+    "🛡️ Governança SaaS",
 ])
 
 # =============================================================================
@@ -739,20 +869,38 @@ with aba_canvas_negocios:
         botao_salvar_canvas = st.form_submit_button("💾 Registar Arquitetura do Modelo de Negócios")
         
         if botao_salvar_canvas:
-            canvas_ativo = projeto.lean_canvas
-            canvas_ativo.problema = input_problema
-            canvas_ativo.solucao_mvp = input_solucao
-            canvas_ativo.mvp_descricao = input_mvp_descricao
-            canvas_ativo.metricas_chave = input_metricas
-            canvas_ativo.proposta_valor = input_proposta_valor
-            canvas_ativo.vantagem_injusta = input_vantagem
-            canvas_ativo.canais = input_canais
-            canvas_ativo.segmentos = input_segmentos
-            canvas_ativo.estrutura_custos = input_estrutura_custos
-            canvas_ativo.fontes_receita = input_receitas
-            canvas_ativo.ods_onu = input_ods_onu
-            session.commit()
-            st.success("✅ As diretrizes estratégicas da startup foram atualizadas com sucesso no repositório.")
+            try:
+                verificar_permissao_rbac(
+                    membership_ativa,
+                    PermissaoSaaS.EBT_EDITAR_DIAGNOSTICO,
+                    ebt_alvo_id=projeto.id,
+                )
+                canvas_ativo = projeto.lean_canvas
+                canvas_ativo.problema = input_problema
+                canvas_ativo.solucao_mvp = input_solucao
+                canvas_ativo.mvp_descricao = input_mvp_descricao
+                canvas_ativo.metricas_chave = input_metricas
+                canvas_ativo.proposta_valor = input_proposta_valor
+                canvas_ativo.vantagem_injusta = input_vantagem
+                canvas_ativo.canais = input_canais
+                canvas_ativo.segmentos = input_segmentos
+                canvas_ativo.estrutura_custos = input_estrutura_custos
+                canvas_ativo.fontes_receita = input_receitas
+                canvas_ativo.ods_onu = input_ods_onu
+                registrar_evento_auditoria(
+                    session,
+                    tenant_id=tenant_ativo.id,
+                    user_id=membership_ativa.user_id,
+                    acao="lean_canvas.atualizar",
+                    entidade_tipo="LeanCanvasEBT",
+                    entidade_id=canvas_ativo.id,
+                    resumo=f"Lean Canvas da EBT '{projeto.nome_startup}' atualizado.",
+                )
+                session.commit()
+                st.success("✅ As diretrizes estratégicas da startup foram atualizadas e auditadas com sucesso.")
+            except ErroPermissaoRBAC as erro_rbac:
+                session.rollback()
+                st.error(f"🔒 {erro_rbac}")
 
 # =============================================================================
 # ABA 2: PREMISSAS MACROECONÓMICAS E DE TRAÇÃO
@@ -808,16 +956,25 @@ with aba_premissas_mercado:
         botao_atualizar_premissas = st.form_submit_button("⚡ Injetar Parâmetros no Motor de Valuation")
         
         if botao_atualizar_premissas:
-            premissas_atuais.horizonte_meses = input_horizonte
-            premissas_atuais.tma_anual_pct = input_tma
-            premissas_atuais.cac_estimado = input_cac_projetado
-            premissas_atuais.churn_mensal_pct = input_churn_mensal
-            premissas_atuais.conversao_freemium_pct = input_taxa_conversao
-            premissas_atuais.crescimento_mensal_pct = input_crescimento_organico
-            premissas_atuais.usuarios_freemium_base = input_base_freemium
-            session.commit()
-            st.success("✅ O Motor Económico foi atualizado e as projeções foram recalculadas.")
-            st.rerun()
+            try:
+                atualizar_premissas_ebt(
+                    session,
+                    membership=membership_ativa,
+                    ebt_id=projeto.id,
+                    horizonte_meses=input_horizonte,
+                    tma_anual_pct=input_tma,
+                    cac_estimado=input_cac_projetado,
+                    churn_mensal_pct=input_churn_mensal,
+                    conversao_freemium_pct=input_taxa_conversao,
+                    crescimento_mensal_pct=input_crescimento_organico,
+                    usuarios_freemium_base=input_base_freemium,
+                )
+                session.commit()
+                st.success("✅ O Motor Económico foi atualizado e auditado com sucesso.")
+                st.rerun()
+            except ErroPermissaoRBAC as erro_rbac:
+                session.rollback()
+                st.error(f"🔒 {erro_rbac}")
 
 # =============================================================================
 # ABA 3: NECESSIDADE DE CAPITAL E CAPEX
@@ -849,15 +1006,35 @@ with aba_capex_infra:
         botao_inserir_investimento = st.form_submit_button("➕ Adicionar à Rodada de Captação")
         
         if botao_inserir_investimento and descricao_investimento:
-            novo_capex = InvestimentoDB(
-                categoria=categoria_investimento, 
-                descricao=descricao_investimento, 
-                valor=valor_investimento, 
-                projeto_id=projeto.id
-            )
-            session.add(novo_capex)
-            session.commit()
-            st.rerun()
+            try:
+                verificar_permissao_rbac(
+                    membership_ativa,
+                    PermissaoSaaS.EBT_EDITAR_DIAGNOSTICO,
+                    ebt_alvo_id=projeto.id,
+                )
+                novo_capex = ItemCapexEBT(
+                    tenant_id=tenant_ativo.id,
+                    ebt_id=projeto.id,
+                    categoria=categoria_investimento, 
+                    descricao=descricao_investimento, 
+                    valor=valor_investimento, 
+                )
+                session.add(novo_capex)
+                session.flush()
+                registrar_evento_auditoria(
+                    session,
+                    tenant_id=tenant_ativo.id,
+                    user_id=membership_ativa.user_id,
+                    acao="capex.adicionar",
+                    entidade_tipo="ItemCapexEBT",
+                    entidade_id=novo_capex.id,
+                    resumo=f"Item Capex '{descricao_investimento}' (R$ {valor_investimento:,.2f}) adicionado.",
+                )
+                session.commit()
+                st.rerun()
+            except ErroPermissaoRBAC as erro_rbac:
+                session.rollback()
+                st.error(f"🔒 {erro_rbac}")
 
     for item_capex in projeto.investimentos:
         coluna_texto, coluna_botao = st.columns([11, 1])
@@ -866,9 +1043,27 @@ with aba_capex_infra:
             f"Orçamento Alocado: R$ {item_capex.valor:,.2f}"
         )
         if coluna_botao.button("🗑️", key=f"excluir_capex_{item_capex.id}"):
-            session.delete(item_capex)
-            session.commit()
-            st.rerun()
+            try:
+                verificar_permissao_rbac(
+                    membership_ativa,
+                    PermissaoSaaS.EBT_EDITAR_DIAGNOSTICO,
+                    ebt_alvo_id=projeto.id,
+                )
+                registrar_evento_auditoria(
+                    session,
+                    tenant_id=tenant_ativo.id,
+                    user_id=membership_ativa.user_id,
+                    acao="capex.excluir",
+                    entidade_tipo="ItemCapexEBT",
+                    entidade_id=item_capex.id,
+                    resumo=f"Item Capex '{item_capex.descricao}' removido.",
+                )
+                session.delete(item_capex)
+                session.commit()
+                st.rerun()
+            except ErroPermissaoRBAC as erro_rbac:
+                session.rollback()
+                st.error(f"🔒 {erro_rbac}")
 
     if projeto.investimentos:
         st.metric("Total Requisitado para a Rodada de Financiamento (Seed / Pre-Seed)", f"R$ {capex_total_apurado:,.2f}")
@@ -903,15 +1098,35 @@ with aba_opex_burn:
         botao_inserir_opex = st.form_submit_button("➕ Acrescentar Custo na DRE")
         
         if botao_inserir_opex and descricao_despesa:
-            novo_opex = CustoFixoDB(
-                categoria=categoria_despesa, 
-                descricao=descricao_despesa, 
-                valor_mensal=valor_despesa, 
-                projeto_id=projeto.id
-            )
-            session.add(novo_opex)
-            session.commit()
-            st.rerun()
+            try:
+                verificar_permissao_rbac(
+                    membership_ativa,
+                    PermissaoSaaS.EBT_EDITAR_DIAGNOSTICO,
+                    ebt_alvo_id=projeto.id,
+                )
+                novo_opex = ItemOpexEBT(
+                    tenant_id=tenant_ativo.id,
+                    ebt_id=projeto.id,
+                    categoria=categoria_despesa, 
+                    descricao=descricao_despesa, 
+                    valor_mensal=valor_despesa, 
+                )
+                session.add(novo_opex)
+                session.flush()
+                registrar_evento_auditoria(
+                    session,
+                    tenant_id=tenant_ativo.id,
+                    user_id=membership_ativa.user_id,
+                    acao="opex.adicionar",
+                    entidade_tipo="ItemOpexEBT",
+                    entidade_id=novo_opex.id,
+                    resumo=f"Item Opex '{descricao_despesa}' (R$ {valor_despesa:,.2f}/mês) adicionado.",
+                )
+                session.commit()
+                st.rerun()
+            except ErroPermissaoRBAC as erro_rbac:
+                session.rollback()
+                st.error(f"🔒 {erro_rbac}")
 
     for item_opex in projeto.custos_fixos:
         col_txt_op, col_btn_op = st.columns([11, 1])
@@ -920,9 +1135,27 @@ with aba_opex_burn:
             f"Saída Mensal Constante: R$ {item_opex.valor_mensal:,.2f}/mês"
         )
         if col_btn_op.button("🗑️", key=f"excluir_opex_{item_opex.id}"):
-            session.delete(item_opex)
-            session.commit()
-            st.rerun()
+            try:
+                verificar_permissao_rbac(
+                    membership_ativa,
+                    PermissaoSaaS.EBT_EDITAR_DIAGNOSTICO,
+                    ebt_alvo_id=projeto.id,
+                )
+                registrar_evento_auditoria(
+                    session,
+                    tenant_id=tenant_ativo.id,
+                    user_id=membership_ativa.user_id,
+                    acao="opex.excluir",
+                    entidade_tipo="ItemOpexEBT",
+                    entidade_id=item_opex.id,
+                    resumo=f"Item Opex '{item_opex.descricao}' removido.",
+                )
+                session.delete(item_opex)
+                session.commit()
+                st.rerun()
+            except ErroPermissaoRBAC as erro_rbac:
+                session.rollback()
+                st.error(f"🔒 {erro_rbac}")
 
     if projeto.custos_fixos:
         st.metric("Piso do Burn Rate de Manutenção", f"R$ {opex_fixo_mensal:,.2f} ao mês")
@@ -935,51 +1168,104 @@ with aba_saas_pricing:
         "https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?q=80&w=1000&auto=format&fit=crop", 
         width="stretch"
     )
-    st.header("💳 Engenharia de Preços e Tiers de Assinatura")
+    st.header("💳 Engenharia de Preços e Tiers de Assinatura (Pagos & Free Tier)")
+    st.info(
+        "💡 **Suporte Nativo a Free Tier (R$ 0,00)**: Para simular um **Plano Gratuito (Free Tier / PLG)**, "
+        "informe `Receita Fixa (R$/Mês) = 0,00` e defina o `Custo de Nuvem/AWS por User (R$)`. "
+        "O motor contabilizará automaticamente o COGS de nuvem da base gratuita e sua conversão para os planos pagos, "
+        "**sem diluir o Ticket Médio (ARPU) dos assinantes pagantes**."
+    )
 
     with st.form("formulario_cadastro_planos", clear_on_submit=True):
-        nome_do_tier = st.text_input("Nomenclatura do Plano de Vendas (Ex: Plano Starter, Enterprise B2B)")
+        nome_do_tier = st.text_input("Nomenclatura do Plano de Vendas (Ex: Free Tier, Plano Starter, Enterprise B2B)")
         
         col_pr1, col_pr2, col_pr3, col_pr4, col_pr5 = st.columns(5)
         ticket_plano = col_pr1.number_input("Receita Fixa (R$/Mês)", min_value=0.0)
-        volume_clientes_plano = col_pr2.number_input("Número de Licenças Vendidas", min_value=0)
+        volume_clientes_plano = col_pr2.number_input("Número de Licenças Ativas", min_value=0)
         taxa_cartao_plano = col_pr3.number_input("Taxa de Cartão/Gateway (%)", value=5.0)
         carga_fiscal_plano = col_pr4.number_input("Retenção de Impostos (%)", value=6.0)
         custo_nuvem_plano = col_pr5.number_input("Custo de Nuvem/AWS por User (R$)", min_value=0.0)
 
-        botao_inserir_plano = st.form_submit_button("➕ Homologar Nova Linha de Receita")
+        botao_inserir_plano = st.form_submit_button("➕ Homologar Tier de Preço / Free Tier")
         
         if botao_inserir_plano and nome_do_tier:
-            novo_plano_saas = PlanoSaaSDB(
-                nome_plano=nome_do_tier, 
-                ticket_mensal=ticket_plano, 
-                usuarios_ativos_base=volume_clientes_plano,
-                taxas_pagamento_pct=taxa_cartao_plano, 
-                impostos_pct=carga_fiscal_plano, 
-                custo_servidor_por_usuario=custo_nuvem_plano,
-                projeto_id=projeto.id
-            )
-            session.add(novo_plano_saas)
-            session.commit()
-            st.rerun()
+            try:
+                verificar_permissao_rbac(
+                    membership_ativa,
+                    PermissaoSaaS.EBT_EDITAR_DIAGNOSTICO,
+                    ebt_alvo_id=projeto.id,
+                )
+                novo_plano_saas = PlanoSaaSEBT(
+                    tenant_id=tenant_ativo.id,
+                    ebt_id=projeto.id,
+                    nome_plano=nome_do_tier, 
+                    ticket_mensal=ticket_plano, 
+                    usuarios_ativos_base=volume_clientes_plano,
+                    taxas_pagamento_pct=taxa_cartao_plano, 
+                    impostos_pct=carga_fiscal_plano, 
+                    custo_servidor_por_usuario=custo_nuvem_plano,
+                )
+                session.add(novo_plano_saas)
+                session.flush()
+                registrar_evento_auditoria(
+                    session,
+                    tenant_id=tenant_ativo.id,
+                    user_id=membership_ativa.user_id,
+                    acao="plano_saas.adicionar",
+                    entidade_tipo="PlanoSaaSEBT",
+                    entidade_id=novo_plano_saas.id,
+                    resumo=f"Plano SaaS '{nome_do_tier}' (R$ {ticket_plano:,.2f}) homologado.",
+                )
+                session.commit()
+                st.rerun()
+            except ErroPermissaoRBAC as erro_rbac:
+                session.rollback()
+                st.error(f"🔒 {erro_rbac}")
 
     for assinatura in projeto.planos_saas:
         col_txt_saas, col_btn_saas = st.columns([11, 1])
         
         mrr_deste_plano = assinatura.ticket_mensal * assinatura.usuarios_ativos_base
         desconto_total = (assinatura.taxas_pagamento_pct + assinatura.impostos_pct) / 100
-        margem_deste_plano = (mrr_deste_plano * (1 - desconto_total)) - (assinatura.custo_servidor_por_usuario * assinatura.usuarios_ativos_base)
+        custo_nuvem_total_tier = assinatura.custo_servidor_por_usuario * assinatura.usuarios_ativos_base
+        margem_deste_plano = (mrr_deste_plano * (1 - desconto_total)) - custo_nuvem_total_tier
         
-        col_txt_saas.success(
-            f"💳 **{assinatura.nome_plano}** — Preço (ARPU): R$ {assinatura.ticket_mensal:.2f} · "
-            f"Contas Ativas: {assinatura.usuarios_ativos_base} · "
-            f"Receita Produzida: R$ {mrr_deste_plano:,.2f} · "
-            f"Lucro Bruto do Tier: R$ {margem_deste_plano:,.2f}"
-        )
+        if assinatura.ticket_mensal <= 0.0:
+            col_txt_saas.info(
+                f"🆓 **FREE TIER: {assinatura.nome_plano}** — Preço: R$ 0,00 (Gratuito) · "
+                f"Usuários Free: {assinatura.usuarios_ativos_base} · "
+                f"COGS de Nuvem do Free Tier: R$ {custo_nuvem_total_tier:,.2f}/mês · "
+                f"Não dilui o ARPU Pago"
+            )
+        else:
+            col_txt_saas.success(
+                f"💳 **{assinatura.nome_plano}** — Preço (ARPU): R$ {assinatura.ticket_mensal:.2f} · "
+                f"Contas Ativas: {assinatura.usuarios_ativos_base} · "
+                f"Receita Produzida: R$ {mrr_deste_plano:,.2f} · "
+                f"Lucro Bruto do Tier: R$ {margem_deste_plano:,.2f}"
+            )
         if col_btn_saas.button("🗑️", key=f"excluir_plano_{assinatura.id}"):
-            session.delete(assinatura)
-            session.commit()
-            st.rerun()
+            try:
+                verificar_permissao_rbac(
+                    membership_ativa,
+                    PermissaoSaaS.EBT_EDITAR_DIAGNOSTICO,
+                    ebt_alvo_id=projeto.id,
+                )
+                registrar_evento_auditoria(
+                    session,
+                    tenant_id=tenant_ativo.id,
+                    user_id=membership_ativa.user_id,
+                    acao="plano_saas.excluir",
+                    entidade_tipo="PlanoSaaSEBT",
+                    entidade_id=assinatura.id,
+                    resumo=f"Plano SaaS '{assinatura.nome_plano}' removido.",
+                )
+                session.delete(assinatura)
+                session.commit()
+                st.rerun()
+            except ErroPermissaoRBAC as erro_rbac:
+                session.rollback()
+                st.error(f"🔒 {erro_rbac}")
 
 # =============================================================================
 # ABA 6: AUDITORIA LEGAL E DUE DILIGENCE
@@ -1045,30 +1331,53 @@ with aba_legal_riscos:
         botao_atualizar_legal = st.form_submit_button("💾 Selar Auditoria no Data Room")
         
         if botao_atualizar_legal:
-            dados_legais = projeto.juridico
-            
-            # Adaptação dos valores se estiverem mapeados de forma diferente no selectbox
-            mapeamento_inpi = {
-                "Não Iniciado (Risco Iminente)": "Não Iniciado",
-                "Processo de Código Fonte Depositado": "Código Depositado",
-                "Certificado Oficial de Software Emitido": "Certificado Emitido"
-            }
-            mapeamento_marca = {
-                "Não Iniciado (Vulnerabilidade de Uso)": "Não Iniciado",
-                "Busca de Anterioridade Efectuada": "Busca Realizada",
-                "Processo protocolado no INPI": "Processo em Andamento",
-                "Direito de Marca Concedido": "Marca Concedida"
-            }
-            
-            dados_legais.registro_inpi = mapeamento_inpi.get(status_inpi_software, "Não Iniciado")
-            dados_legais.marca_status = mapeamento_marca.get(status_marca_comercial, "Não Iniciado")
-            dados_legais.adequacao_lgpd = validacao_lgpd
-            dados_legais.contrato_vesting = validacao_vesting
-            dados_legais.custo_estimado_legal = honorarios_legais
-            
-            session.commit()
-            st.success("✅ As fragilidades de governança foram avaliadas e registadas.")
-            st.rerun()
+            try:
+                verificar_permissao_rbac(
+                    membership_ativa,
+                    PermissaoSaaS.EBT_EDITAR_DIAGNOSTICO,
+                    ebt_alvo_id=projeto.id,
+                )
+                dados_legais = projeto.juridico
+                
+                mapeamento_inpi = {
+                    "Não Iniciado (Risco Iminente)": "Não Iniciado",
+                    "Processo de Código Fonte Depositado": "Código Depositado",
+                    "Certificado Oficial de Software Emitido": "Certificado Emitido"
+                }
+                mapeamento_marca = {
+                    "Não Iniciado (Vulnerabilidade de Uso)": "Não Iniciado",
+                    "Busca de Anterioridade Efectuada": "Busca Realizada",
+                    "Processo protocolado no INPI": "Processo em Andamento",
+                    "Direito de Marca Concedido": "Marca Concedida"
+                }
+                
+                dados_legais.registro_inpi = mapeamento_inpi.get(status_inpi_software, "Não Iniciado")
+                dados_legais.marca_status = mapeamento_marca.get(status_marca_comercial, "Não Iniciado")
+                dados_legais.adequacao_lgpd = validacao_lgpd
+                dados_legais.contrato_vesting = validacao_vesting
+                dados_legais.custo_estimado_legal = honorarios_legais
+                
+                registrar_evento_auditoria(
+                    session,
+                    tenant_id=tenant_ativo.id,
+                    user_id=membership_ativa.user_id,
+                    acao="juridico.atualizar",
+                    entidade_tipo="JuridicoEBT",
+                    entidade_id=dados_legais.id,
+                    resumo=f"Due diligence jurídica da EBT '{projeto.nome_startup}' selada.",
+                    dados_novos={
+                        "inpi": dados_legais.registro_inpi,
+                        "marca": dados_legais.marca_status,
+                        "lgpd": dados_legais.adequacao_lgpd,
+                        "vesting": dados_legais.contrato_vesting,
+                    },
+                )
+                session.commit()
+                st.success("✅ As fragilidades de governança foram avaliadas, registadas e auditadas.")
+                st.rerun()
+            except ErroPermissaoRBAC as erro_rbac:
+                session.rollback()
+                st.error(f"🔒 {erro_rbac}")
 
     st.markdown("---")
     st.subheader("Indicador Sintético de Imunidade e Compliance")
@@ -1152,6 +1461,107 @@ with aba_viabilidade_vpl:
     )
 
     st.plotly_chart(figura_cashflow_projetado, use_container_width=True)
+
+    # ── Validações de Sanidade do Motor Financeiro (Fase 0 SaaS) ─────────────
+    st.subheader(f"🛡️ Auditoria de Sanidade do Motor Financeiro (v{resultado_simulacao.versao_motor})")
+    st.caption(f"Hash Determinístico da Simulação (SHA-256): `{resultado_simulacao.hash_entrada[:16]}...`")
+
+    if not resultado_simulacao.alertas:
+        st.success("✅ Todas as validações matemáticas e setoriais passaram sem alertas.")
+    else:
+        for alerta in resultado_simulacao.alertas:
+            texto_alerta = (
+                f"**[{alerta.codigo}] {alerta.titulo}** — {alerta.mensagem}\n\n"
+                f"💡 *Recomendação:* {alerta.recomendacao}"
+            )
+            if alerta.severidade == SeveridadeAlerta.CRITICO:
+                st.error(texto_alerta)
+            elif alerta.severidade == SeveridadeAlerta.AVISO:
+                st.warning(texto_alerta)
+            else:
+                st.info(texto_alerta)
+
+    # ── Comparativo de Cenários (Base / Otimista / Pessimista) ───────────────
+    with st.expander("🎯 Matriz Comparativa de Cenários (Base vs. Otimista vs. Pessimista)", expanded=False):
+        linhas_cenarios = []
+        for rotulo_cenario, chave_cenario in [
+            ("Pessimista (Stress Test)", TipoCenario.PESSIMISTA),
+            ("Base (Plano Atual)", TipoCenario.BASE),
+            ("Otimista (Bull Case)", TipoCenario.OTIMISTA),
+        ]:
+            sim_c = comparativo_cenarios.cenarios[chave_cenario]
+            linhas_cenarios.append({
+                "Cenário": rotulo_cenario,
+                "VPL Projetado": f"R$ {sim_c.viabilidade.valor_presente_liquido_vpl:,.2f}",
+                "TIR Anualizada": (
+                    f"{sim_c.viabilidade.taxa_interna_retorno_anual_pct:,.2f}%"
+                    if sim_c.viabilidade.validade_da_tir
+                    else "Indefinida"
+                ),
+                "Payback": sim_c.viabilidade.mes_de_breakeven_payback_texto,
+                "LTV / CAC": f"{sim_c.unit_economics.indice_ltv_cac:.2f}x",
+                "Alertas Críticos": "Sim ⚠️" if sim_c.possui_alertas_criticos else "Não ✅",
+            })
+        st.dataframe(pd.DataFrame(linhas_cenarios), use_container_width=True, hide_index=True)
+
+    # ── Versionamento Imutável e Simulação de Monte Carlo (Fase 1/2 SaaS) ────
+    with st.expander("📸 Versionamento Imutável de Simulações & Stress Test de Monte Carlo", expanded=False):
+        col_ver_btn, col_mc_btn = st.columns(2)
+        if col_ver_btn.button("📌 Congelar e Versionar Simulação Atual (Snapshot Imutável)"):
+            try:
+                v_snap, res_snap, _ = executar_e_versionar_simulacao_ebt(
+                    session,
+                    membership=membership_ativa,
+                    ebt_id=projeto.id,
+                    cenario=TipoCenario.BASE,
+                )
+                session.commit()
+                st.success(
+                    f"✅ Versão imutável **v{v_snap.numero_versao}** congelada com hash `{v_snap.hash_entrada_sha256[:16]}...`!"
+                )
+            except ErroPermissaoRBAC as erro_rbac:
+                session.rollback()
+                st.error(f"🔒 {erro_rbac}")
+
+        if col_mc_btn.button("🎲 Executar Simulação Estocástica de Monte Carlo (300 Iterações)"):
+            if assinatura_ativa and not assinatura_ativa.permite_monte_carlo:
+                st.warning(
+                    f"🔒 A Simulação de Monte Carlo é exclusiva dos planos **PRO** e **ENTERPRISE** "
+                    f"(plano atual: **{assinatura_ativa.plano_codigo.upper()}**)."
+                )
+            else:
+                mc_res = simular_monte_carlo(entrada_simulacao, iteracoes=300, semente=42)
+                mc_c1, mc_c2, mc_c3, mc_c4 = st.columns(4)
+                mc_c1.metric("Probabilidade de VPL > 0", f"{mc_res.probabilidade_vpl_positivo_pct:.1f}%")
+                mc_c2.metric("VPL Pessimista (P10)", f"R$ {mc_res.vpl_p10:,.2f}")
+                mc_c3.metric("VPL Mediano (P50)", f"R$ {mc_res.vpl_p50_mediana:,.2f}")
+                mc_c4.metric("VPL Otimista (P90)", f"R$ {mc_res.vpl_p90:,.2f}")
+
+        versoes_salvas = (
+            session.query(VersaoPremissasEBT)
+            .filter(VersaoPremissasEBT.ebt_id == projeto.id)
+            .order_by(VersaoPremissasEBT.numero_versao.desc())
+            .all()
+        )
+        if versoes_salvas:
+            st.markdown("**Histórico de Versões Imutáveis Auditadas para esta EBT:**")
+            linhas_historico = []
+            for v in versoes_salvas:
+                r_sim = (
+                    session.query(ResultadoSimulacaoEBT)
+                    .filter(ResultadoSimulacaoEBT.versao_premissas_id == v.id)
+                    .first()
+                )
+                linhas_historico.append({
+                    "Versão": f"v{v.numero_versao}",
+                    "Hash SHA-256 (Entrada)": f"{v.hash_entrada_sha256[:16]}...",
+                    "Motor": r_sim.versao_motor if r_sim else "-",
+                    "MRR Base": f"R$ {r_sim.mrr_bruto_base:,.2f}" if r_sim else "-",
+                    "VPL": f"R$ {r_sim.vpl:,.2f}" if r_sim else "-",
+                    "LTV/CAC": f"{r_sim.ltv_cac:.2f}x" if r_sim else "-",
+                    "Data (UTC)": v.criado_em.strftime("%d/%m/%Y %H:%M") if v.criado_em else "-",
+                })
+            st.dataframe(pd.DataFrame(linhas_historico), use_container_width=True, hide_index=True)
 
     st.subheader("Auditabilidade Contabilística — Demonstrativo Linear de Caixa")
     tabela_demonstrativo_financeiro = pd.DataFrame({
@@ -1246,94 +1656,151 @@ with aba_dashboard_unit:
             )
 
 # =============================================================================
-# ABA 10: O CÉREBRO ARTIFICIAL (MENTORIA VC GEMINI)
+# ABA 10: O CÉREBRO ARTIFICIAL (COMITÊ VC GOVERNADO + SANITIZAÇÃO LGPD + CACHE)
 # =============================================================================
 with aba_mentor_vc:
     safe_image(
         "https://images.unsplash.com/photo-1677442136019-21780ecad995?q=80&w=1000&auto=format&fit=crop", 
         width="stretch"
     )
-    st.header("🤖 Fundo Inteligente: Comité de Avaliação Virtual Assistido")
+    st.header("🤖 Comitê de Avaliação VC Assistido e Governado (Fase 3)")
     st.info(
-        "O Modelo Gemini foi configurado para adotar a identidade de um Membro Sênior de um Conselho de Fundo Privado (Venture Capital). "
-        "A análise procurará desconstruir ativamente as hipóteses, encontrando as brechas tecnológicas e as ilusões nos Unit Economics. Submeta-se ao questionário duro do mercado."
+        "Governança de IA em Produção: Todos os textos abertos passam por **sanitização automática de PII (LGPD)** "
+        "(mascaramento de CPFs, CNPJs, e-mails e telefones) antes do envio ao provedor. O parecer é indexado por "
+        "**hash SHA-256 do contexto**, economizando quotas via cache inteligente, e requer **homologação do Consultor**."
     )
 
-    if not GEMINI_AVAILABLE:
-        st.error("⚠️ Foi observada a ausência de infraestrutura conectiva. Exige que a biblioteca `google-genai` esteja plenamente operacional.")
-    else:
-        chave_api_usuario = st.text_input("Credenciais Seguras: Coloque a Palavra-passe da API Gemini:", type="password", key="gemini_key_widget")
+    prompt_preview_sanitizado, hash_contexto_preview = construir_prompt_vc_governado(
+        projeto, resultado_simulacao
+    )
+    with st.expander("🔍 Inspecionar Prompt Anonimizado (Sem PII) e Hash SHA-256 do Contexto"):
+        st.caption(f"Hash SHA-256 do Contexto (Financeiro + Qualitativo Sanitizado): `{hash_contexto_preview}`")
+        st.code(prompt_preview_sanitizado, language="markdown")
 
-        if st.button("🚀 Submeter Todo o Prospecto de Operações aos Avaliadores", type="primary"):
-            if not st.session_state.get("gemini_key_widget"):
-                st.warning("⚠️ Bloqueio Preventivo: Uma chave de autenticação Google válida é vital para desbloquear o algoritmo de raciocínio profundo.")
-            else:
-                with st.spinner("A transmitir a carga documental para a inteligência na rede. A proceder à intersecção dos Unit Economics com o grau de risco jurídico apresentado..."):
-                    
-                    prompt_para_o_mentor = f"""Assuma o papel de um Venture Capitalist Sênior ou Investidor Anjo analisando uma startup de tecnologia (SaaS/App) para uma possível rodada de captação (Seed/Series A) no Demoday.
-A sua tarefa é fazer a Due Diligence do Pitch Deck da startup descrita abaixo com o rigor técnico e financeiro de um fundo de investimento real.
+    col_ia_prov, col_ia_cfg = st.columns([2, 1])
+    with col_ia_prov:
+        modo_provedor_ia = st.radio(
+            "Provedor de Inteligência do Comitê VC:",
+            options=[
+                "🏛️ Copiloto VC Determinístico Interno (Sem Chave Externa / Custo US$ 0)",
+                "✨ Google Gemini API (Nuvem Externa com Sanitização LGPD)",
+            ],
+            horizontal=False,
+        )
+    with col_ia_cfg:
+        forcar_nova_geracao_ia = st.checkbox(
+            "Ignorar cache e forçar nova geração",
+            value=False,
+            help="Quando desmarcado, se o hash SHA-256 do projeto não mudou, reutiliza o parecer sem descontar da quota mensal.",
+        )
 
-<projeto_startup>
-Nome da Operação: {projeto.nome_startup}
-Dores de Mercado (Problema): {safe_str(projeto.lean_canvas.problema)}
-Arquitetura Tecnológica e MVP: {safe_str(projeto.lean_canvas.solucao_mvp)}
-Relatório da Tração (Prova de Conceito): {safe_str(projeto.lean_canvas.mvp_descricao)}
-Proposta Única de Valor Global: {safe_str(projeto.lean_canvas.proposta_valor)}
-O Fosso Competitivo (Moat/Vantagem): {safe_str(projeto.lean_canvas.vantagem_injusta)}
-ESG e Compliance Social ODS: {safe_str(projeto.lean_canvas.ods_onu)}
-</projeto_startup>
+    chave_api_usuario = ""
+    if modo_provedor_ia.startswith("✨"):
+        chave_api_usuario = st.text_input(
+            "Credenciais Seguras: Chave da API Google Gemini:",
+            type="password",
+            key="gemini_key_widget",
+        )
 
-<unit_economics>
-Receita Recorrente Consolidada (MRR): R$ {mrr_bruto_total_consolidado:,.2f}
-Teto de Receita Atual (ARR): R$ {faturamento_anualizado_arr:,.2f}
-Queima de Caixa Consolidada (Burn Rate): R$ {burn_rate_total_mensal:,.2f}/mês
-EBITDA Mensal: R$ {resultado_operacional_ebitda:,.2f}
-Proporção Mágica de Escala (LTV/CAC): {indice_ltv_cac:.2f}x (Benchmark de corte: 3x para Série A)
-Tempo Restante de Caixa Livre (Runway): {f"{meses_runway_sobrevivencia:.1f} meses até a falência" if meses_runway_sobrevivencia else "Empresa operando no azul (Lucratividade alcançada)"}
-Evasão de Base (Churn Mensal): {premissas_atuais.churn_mensal_pct:.1f}%
-Custo Nominal de Aquisição (CAC): R$ {cac_aquisicao_mercado:,.2f}
-Margem Bruta (Ex-Infra): {margem_bruta_percentual:.1f}%
-</unit_economics>
-
-<passivos_e_compliance>
-Patente Tecnológica (INPI): {projeto.juridico.registro_inpi}
-Privacidade por Design (LGPD): {"Auditoria Conforme" if projeto.juridico.adequacao_lgpd else "Auditoria Reprovada"}
-Acordo Societário (Vesting): {"Formalizado e Resguardado" if projeto.juridico.contrato_vesting else "Irregular"}
-</passivos_e_compliance>
-
-A sua devolução de feedback deve ser perfeitamente formatada em Markdown, utilizando os seguintes blocos obrigatórios de resposta:
-## 1. Tese de Investimento Global
-(Você aprovaria o aporte de capital neste negócio? A dor mapeada é profunda e o mercado é grande o suficiente para uma saída (exit) lucrativa?)
-
-## 2. Radiografia dos Unit Economics e Valuation
-(Faça uma auditoria crítica dos números. O MRR justifica o valuation esperado? O Burn Rate é sustentável em relação ao Runway? Faça um apontamento incisivo sobre a relação de LTV e CAC.)
-
-## 3. Viabilidade Técnica e Escala
-(A arquitetura do MVP permite ganho de escala (scale-up) sem gargalos operacionais massivos? A Vantagem Injusta protege a empresa de copycats?)
-
-## 4. Due Diligence de Compliance e Riscos
-(Examine as ameaças de proteção de dados e LGPD, os processos de registro no INPI e o acordo de Vesting. Há passivos que afugentariam um fundo de VC?)
-
-## 5. Veredito do Comitê de Investimento e Próximos Passos
-(Dê o veredito final: "Aprovado para Term Sheet", "Requer Ajustes (Watchlist)" ou "Recusado Formalmente". Liste 3 ações corretivas operacionais imediatas e implacáveis para os founders melhorarem a tração antes da próxima rodada institucional.)
-"""
-                    try:
-                        conector_algoritmo = _genai.Client(api_key=st.session_state.gemini_key_widget)
-                        saida_do_modelo = conector_algoritmo.models.generate_content(
-                            model="gemini-2.5-flash", 
-                            contents=prompt_para_o_mentor
+    if st.button("🚀 Solicitar Parecer Governado ao Comitê VC", type="primary"):
+        if modo_provedor_ia.startswith("✨") and not chave_api_usuario.strip():
+            st.warning("⚠️ Informe uma chave válida da API Google Gemini ou selecione o Copiloto VC Determinístico Interno.")
+        else:
+            try:
+                with st.spinner("Executando pipeline governado de IA (Sanitização PII -> Verificação de Cache/Quota -> Geração)..."):
+                    provedor_selecionado = (
+                        ProvedorGeminiIA(api_key=chave_api_usuario.strip(), modelo="gemini-2.5-flash")
+                        if modo_provedor_ia.startswith("✨")
+                        else ProvedorAuditoriaDeterministicoIA()
+                    )
+                    analise_gerada, job_ia, veio_do_cache = solicitar_parecer_ia_governado(
+                        session,
+                        membership=membership_ativa,
+                        ebt_id=projeto.id,
+                        provedor_ia=provedor_selecionado,
+                        forcar_regeneracao=forcar_nova_geracao_ia,
+                    )
+                    session.commit()
+                    st.session_state["parecer_ia"] = (
+                        analise_gerada.parecer_revisado_consultor_md
+                        or analise_gerada.parecer_gerado_md
+                    )
+                    if veio_do_cache:
+                        st.success(
+                            f"⚡ **Cache Hit Inteligente!** O contexto da EBT não sofreu alterações "
+                            f"(`hash={analise_gerada.hash_entrada_simulacao[:12]}...`). Parecer recuperado sem consumir sua quota mensal!"
                         )
-                        st.session_state["parecer_ia"] = saida_do_modelo.text
-                        st.success("✅ A Carta Documental de Fundamentos do Fundo Privado encontra-se processada na totalidade e cristalizada no servidor. Visite a Aba Final de Exportação para o selo final num dossiê.")
-                    except Exception as erro_da_chamada_remota:
-                        st.error(f"Erro Perturbador na Linha de Redes e Nós Computacionais (Protocolo Google): {erro_da_chamada_remota}")
+                    else:
+                        st.success(
+                            f"✅ Parecer gerado e registrado com sucesso (`Job #{job_ia.id[:8]}`, "
+                            f"Provedor: `{analise_gerada.provedor}/{analise_gerada.modelo}`)."
+                        )
+            except ErroPermissaoRBAC as erro_rbac:
+                session.rollback()
+                st.error(f"🔒 Bloqueio RBAC: {erro_rbac}")
+            except ErroLimitePlanoSaaS as erro_quota:
+                session.rollback()
+                st.error(f"🛑 Limite do Plano Atingido: {erro_quota}")
+            except Exception as erro_ia:
+                session.rollback()
+                st.error(f"Erro durante o processamento do parecer de IA: {erro_ia}")
 
-    if st.session_state["parecer_ia"]:
+    ultima_analise_ebt = (
+        session.query(AnaliseIAEBT)
+        .filter(
+            AnaliseIAEBT.tenant_id == tenant_ativo.id,
+            AnaliseIAEBT.ebt_id == projeto.id,
+        )
+        .order_by(AnaliseIAEBT.criado_em.desc())
+        .first()
+    )
+
+    if ultima_analise_ebt is not None:
+        st.session_state["parecer_ia"] = (
+            ultima_analise_ebt.parecer_revisado_consultor_md
+            or ultima_analise_ebt.parecer_gerado_md
+        )
+        st.markdown("---")
+        col_st1, col_st2, col_st3 = st.columns(3)
+        col_st1.metric(
+            "Status de Homologação",
+            "✅ Aprovado pelo Consultor" if ultima_analise_ebt.aprovado_pelo_consultor else "⏳ Pendente de Revisão",
+        )
+        col_st2.metric("Modelo / Versão Prompt", f"{ultima_analise_ebt.modelo} ({ultima_analise_ebt.versao_prompt})")
+        col_st3.metric("Hash do Contexto", f"{ultima_analise_ebt.hash_entrada_simulacao[:14]}...")
+
+        st.markdown(st.session_state["parecer_ia"])
+
+        st.markdown("---")
+        st.subheader("👨‍💼 Revisão e Homologação Obrigatória pelo Consultor")
+        with st.form("form_homologar_parecer_ia"):
+            texto_para_homologar = st.text_area(
+                "Edite ou complemente o parecer antes de homologá-lo para o Dossiê Oficial:",
+                value=st.session_state["parecer_ia"],
+                height=240,
+            )
+            btn_homologar = st.form_submit_button("✅ Homologar Parecer Oficial pelo Consultor")
+            if btn_homologar:
+                try:
+                    analise_aprovada = revisar_e_aprovar_parecer_ia(
+                        session,
+                        membership=membership_ativa,
+                        analise_id=ultima_analise_ebt.id,
+                        texto_revisado_md=texto_para_homologar,
+                    )
+                    session.commit()
+                    st.session_state["parecer_ia"] = analise_aprovada.parecer_revisado_consultor_md
+                    st.success("✅ Parecer homologado oficialmente pelo Consultor e registrado no AuditLog!")
+                    st.rerun()
+                except ErroPermissaoRBAC as erro_rbac:
+                    session.rollback()
+                    st.error(f"🔒 Apenas Dono, Admin ou Consultor podem homologar pareceres: {erro_rbac}")
+    elif st.session_state["parecer_ia"]:
         st.markdown("---")
         st.markdown(st.session_state["parecer_ia"])
 
 # =============================================================================
-# ABA 12: MOTOR EXPORTADOR DA DATA ROOM (DOCUMENTAÇÃO PDF)
+# ABA 11: MOTOR EXPORTADOR DA DATA ROOM (DOCUMENTAÇÃO PDF GOVERNADA E ASSINADA)
 # =============================================================================
 with aba_pdf_export:
     safe_image(
@@ -1341,7 +1808,31 @@ with aba_pdf_export:
         width="stretch"
     )
     st.header("🖨️ A Data Room Segura: Exportação Dossiê do Demoday")
-    st.info("Plataforma primária de encapsulamento criptográfico do Prospecto Organizacional de Negócios. O Dossiê abarca uma integração das métricas profundas recolhidas ao longo de todas as tabelas em união indissociável ao parecer de risco do comité institucional (IA).")
+    st.info(
+        "Emissão governada do Dossiê Executivo A4 com **cálculo de hash de integridade SHA-256**, "
+        "**armazenamento isolado por Tenant**, **URL assinada com expiração (HMAC)** e suporte **White-Label**."
+    )
+
+    analise_recente_pdf = (
+        session.query(AnaliseIAEBT)
+        .filter(
+            AnaliseIAEBT.tenant_id == tenant_ativo.id,
+            AnaliseIAEBT.ebt_id == projeto.id,
+        )
+        .order_by(AnaliseIAEBT.criado_em.desc())
+        .first()
+    )
+    if analise_recente_pdf and analise_recente_pdf.aprovado_pelo_consultor:
+        st.success("✅ O Parecer de IA desta EBT já se encontra revisado e homologado por um Consultor.")
+    else:
+        st.warning(
+            "⚠️ O Parecer de IA desta EBT ainda não foi homologado por um Consultor na aba '🤖 Comitê VC (IA)'."
+        )
+
+    exigir_homologacao_pdf = st.checkbox(
+        "🔒 Exigir Parecer de IA homologado pelo Consultor para permitir a emissão (Política Institucional)",
+        value=False,
+    )
 
     caixa_interativa_de_revisao_do_comite = st.text_area(
         "Edição da Carta Parecer Oficial (Os registos abaixo transitam da memória permanente originada na análise IA):",
@@ -1349,9 +1840,9 @@ with aba_pdf_export:
         height=250,
     )
 
-    if st.button("🚀 Extrair e Materializar Prospecto Exclusivo (Formatação PDF)", type="primary"):
+    if st.button("🚀 Extrair, Assinar (SHA-256) e Materializar Prospecto PDF", type="primary"):
         try:
-            with st.spinner("Processos Cíclicos Iniciados: O construtor gráfico opera neste momento varrimentos das estruturas plotáveis para as injetar perfeitamente limpas num canvas imutável PDF de folha A4. Operações pesadas exigem tolerância ao compasso temporal..."):
+            with st.spinner("Gerando Dossiê A4, gravando no Storage isolado do Tenant e assinando URL..."):
                 
                 familia_tipografica = "helvetica"
                 motor_escritor_de_pdf = FPDF()
@@ -1385,10 +1876,24 @@ with aba_pdf_export:
                     motor_escritor_de_pdf.ln(4)
 
                 # ==================================
-                # COMPOSIÇÃO DE FOLHA DE ROSTO (PÁGINA 1)
+                # COMPOSIÇÃO DE FOLHA DE ROSTO (PÁGINA 1 - WHITE LABEL DO TENANT)
                 # ==================================
                 motor_escritor_de_pdf.add_page()
-                motor_escritor_de_pdf.ln(45)
+                motor_escritor_de_pdf.set_font(familia_tipografica, "B", 11)
+                selo_consultoria = (
+                    f"DOSSIE INSTITUCIONAL WHITE-LABEL — {tenant_ativo.nome.upper()}"
+                    if (assinatura_ativa and assinatura_ativa.permite_white_label)
+                    else f"PREPARADO POR: {tenant_ativo.nome.upper()} (MASTER MANAGEMENT SAAS)"
+                )
+                motor_escritor_de_pdf.cell(
+                    motor_escritor_de_pdf.epw,
+                    8,
+                    selo_consultoria,
+                    new_x=XPos.LMARGIN,
+                    new_y=YPos.NEXT,
+                    align="C",
+                )
+                motor_escritor_de_pdf.ln(35)
                 motor_escritor_de_pdf.set_font(familia_tipografica, "B", 32)
                 motor_escritor_de_pdf.cell(motor_escritor_de_pdf.epw, 20, "MEMORANDO DE INVESTIMENTO DA SOCIEDADE", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
                 motor_escritor_de_pdf.set_font(familia_tipografica, "B", 22)
@@ -1477,25 +1982,242 @@ with aba_pdf_export:
                         motor_escritor_de_pdf.image(io.BytesIO(bytes_da_pizza_de_distribuicao), x=motor_escritor_de_pdf.l_margin + ponto_medio_calculado // 2, w=ponto_medio_calculado)
 
                 # ==================================
-                # INCLUSÃO FINAL INEXORÁVEL ESCRITA EM PAPEL DO RESULTADO DURO E SECO RECOLHIDO E COMPLETO COM INSERÇÕES ESTATÍSTICAS MATEMÁTICAS PROFUNDAS E EMANADAS DA CRUELDADE FINA ASSINALADA (O LAUDO OFICIAL DO ALGORITMO IA) (PÁGINA FINAL ESCRITA ÚLTIMA DE FUNDAMENTO ÚLTIMO)
+                # LAUDO OFICIAL DO COMITÊ VC (PÁGINA FINAL)
                 # ==================================
                 if caixa_interativa_de_revisao_do_comite:
                     motor_escritor_de_pdf.add_page()
-                    FormatarTituloGrossoH1("V. Veredito Assumido Superior Intransigente Oficial Associativo Frio Ao Desfecho Avaliativo do Crivo Absoluto Do Comité Total de Investimento Mapeado Do Sistema Artificial IA Emissão Emitida Perante Regra Mapeada Extensiva Conclusiva Associada De Sentença Final.")
+                    FormatarTituloGrossoH1("V. Parecer Oficial do Comitê de Investimento e Due Diligence")
                     motor_escritor_de_pdf.set_font(familia_tipografica, "", 12)
                     
-                    # Limpeza de formatações Markdown que podem corromper a FPDF
                     texto_ia_purificado = caixa_interativa_de_revisao_do_comite.replace("•", "-").replace("·", "-").replace("**", "")
-                    motor_escritor_de_pdf.multi_cell(motor_escritor_de_pdf.epw, 7, texto_ia_purificado)
+                    motor_escritor_de_pdf.multi_cell(motor_escritor_de_pdf.epw, 7, safe_str(texto_ia_purificado))
 
-                # Compilação Final Exata
+                # Compilação Final Exata + Registro Governado no Storage e Banco SaaS
                 saida_pdf_bytes_absolutos_reais = bytes(motor_escritor_de_pdf.output())
-                st.success("✅ A Plataforma exportou com sucesso inexorável pleno e irrevogável o documento tático e puramente criptográfico e profundo final exigente que descreve a alma dura exata inteira do negócio perante a realidade bruta das operações.")
+                relatorio_emitido, job_pdf, url_assinada_pdf = registrar_emissao_dossie_pdf(
+                    session,
+                    membership=membership_ativa,
+                    ebt_id=projeto.id,
+                    pdf_bytes=saida_pdf_bytes_absolutos_reais,
+                    exigir_parecer_aprovado=exigir_homologacao_pdf,
+                )
+                session.commit()
+
+                st.success(
+                    f"✅ Dossiê Executivo gerado, assinado e arquivado com sucesso! "
+                    f"(`Job #{job_pdf.id[:8]}`, SHA-256: `{relatorio_emitido.sha256_pdf[:16]}...`)"
+                )
+                st.caption(f"**Storage Key (Isolado por Tenant):** `{relatorio_emitido.storage_key}`")
+                st.caption("**URL Pré-Assinada com Expiração (HMAC-SHA256):**")
+                st.code(url_assinada_pdf, language="text")
                 st.download_button(
-                    "📥 Efetuar o Download Categórico e Absoluto Do Prospecto Term Sheet do Dossiê Do Fundo (.pdf Livre de Imposições Formais e Perfeitas Limpo Exato)", 
+                    "📥 Baixar Dossiê Executivo Assinado (.pdf)", 
                     data=saida_pdf_bytes_absolutos_reais, 
                     file_name=f"TermSheet_Prospecto_Duro_De_{projeto.nome_startup.replace(' ', '_')}.pdf", 
                     mime="application/pdf"
                 )
+        except (ErroPermissaoRBAC, PermissionError) as erro_perm_pdf:
+            session.rollback()
+            st.error(f"🔒 Bloqueio de Governança / RBAC: {erro_perm_pdf}")
+        except ErroLimitePlanoSaaS as erro_quota_pdf:
+            session.rollback()
+            st.error(f"🛑 Limite Mensal de PDFs Atingido: {erro_quota_pdf}")
         except Exception as falha_bruta_profunda_de_geracao_sistema_inviabilizador:
-            st.error(f"Erro Sistémico Crítico Imprevisível Incorreto Falho De Origem Pura Detetado Com Segurança e Transparência Diretamente Reveladora Na Base Crua da Tábua Renderizadora Operacional Local Exata do Construtor de Ficheiros Associada: {falha_bruta_profunda_de_geracao_sistema_inviabilizador}")
+            session.rollback()
+            st.error(f"Erro na geração do Dossiê PDF: {falha_bruta_profunda_de_geracao_sistema_inviabilizador}")
+
+# =============================================================================
+# ABA 12: GOVERNANÇA SAAS, QUOTAS, FILA DE JOBS, SHARE LINKS E AUDITORIA
+# =============================================================================
+with aba_governanca_saas:
+    st.header("🛡️ Governança Multi-Tenant, Quotas, Jobs Assíncronos e Auditoria (LGPD)")
+    st.info(
+        "Painel de controle institucional da Consultoria (Tenant): acompanhe o uso medido e custos de IA do plano, "
+        "monitore a fila de Jobs Assíncronos, gere links temporários para investidores e audite todas as alterações."
+    )
+
+    # 1. Consumo Medido e Limites do Plano
+    uso_atual = obter_ou_criar_uso_mensal(session, tenant_ativo.id)
+    session.commit()
+    total_ebts_ativas = session.query(ClienteEBT).filter(ClienteEBT.ativo.is_(True)).count()
+
+    col_gov1, col_gov2, col_gov3, col_gov4 = st.columns(4)
+    col_gov1.metric(
+        "Plano Contratado",
+        assinatura_ativa.plano_codigo.upper() if assinatura_ativa else "STARTER",
+        delta=f"Status: {assinatura_ativa.status.upper()}" if assinatura_ativa else "TRIAL",
+    )
+    col_gov2.metric(
+        "Workspaces EBT Ativos",
+        f"{total_ebts_ativas} / {assinatura_ativa.limite_ebts if assinatura_ativa else 3}",
+    )
+    col_gov3.metric(
+        f"Análises IA ({uso_atual.ano_mes})",
+        f"{uso_atual.analises_ia_realizadas} / {assinatura_ativa.limite_analises_ia_mes if assinatura_ativa else 15}",
+        delta=f"Custo IA: US$ {uso_atual.custo_ia_acumulado_usd:.4f}",
+    )
+    col_gov4.metric(
+        f"Dossiês PDF / Simulações ({uso_atual.ano_mes})",
+        f"{uso_atual.pdfs_gerados} / {assinatura_ativa.limite_pdfs_mes if assinatura_ativa else 20} PDFs",
+        delta=f"{uso_atual.simulacoes_executadas} simulações",
+    )
+
+    with st.expander("💳 Alterar Plano de Assinatura da Consultoria (Testar Free Tier / Starter / Pro / Enterprise)"):
+        opcoes_planos_saas = [
+            PlanoAssinaturaCodigo.FREE,
+            PlanoAssinaturaCodigo.STARTER,
+            PlanoAssinaturaCodigo.PRO,
+            PlanoAssinaturaCodigo.ENTERPRISE,
+        ]
+        idx_plano_atual = next(
+            (
+                i
+                for i, p in enumerate(opcoes_planos_saas)
+                if assinatura_ativa and p.value == assinatura_ativa.plano_codigo
+            ),
+            1,
+        )
+        with st.form("form_alterar_plano_tenant"):
+            novo_plano_selecionado = st.selectbox(
+                "Selecione o Plano Contratado para este Tenant:",
+                options=opcoes_planos_saas,
+                index=idx_plano_atual,
+                format_func=lambda p: (
+                    "FREE TIER (Gratuito: 1 EBT, 3 Simulações/mês, 1 IA, 1 PDF)"
+                    if p == PlanoAssinaturaCodigo.FREE
+                    else f"{p.value.upper()}"
+                ),
+            )
+            btn_mudar_plano = st.form_submit_button("🔄 Aplicar Novo Plano ao Tenant")
+            if btn_mudar_plano:
+                try:
+                    alterar_plano_assinatura_tenant(
+                        session,
+                        membership=membership_ativa,
+                        novo_plano=novo_plano_selecionado,
+                    )
+                    session.commit()
+                    st.success(f"✅ Plano do Tenant atualizado para **{novo_plano_selecionado.value.upper()}**!")
+                    st.rerun()
+                except ErroPermissaoRBAC as erro_rbac:
+                    session.rollback()
+                    st.error(f"🔒 Apenas o Dono da consultoria pode alterar o plano: {erro_rbac}")
+
+    st.markdown("---")
+
+    # 2. Fila de Jobs Assíncronos e Dossiês Emitidos (Fase 3)
+    col_jobs_esq, col_dossies_dir = st.columns(2)
+    with col_jobs_esq:
+        st.subheader("⚙️ Fila de Jobs Assíncronos (`JobAssincronoSaaS`)")
+        jobs_recentes = listar_jobs_tenant(session, tenant_id=tenant_ativo.id, limite=15)
+        if not jobs_recentes:
+            st.caption("Nenhum job de IA ou PDF processado neste Tenant ainda.")
+        else:
+            df_jobs = pd.DataFrame([
+                {
+                    "Job ID": j.id[:8],
+                    "Tipo": j.tipo_job,
+                    "Status": j.status.upper(),
+                    "Progresso": f"{j.progresso_pct}%",
+                    "Criado em": j.criado_em.strftime("%d/%m %H:%M:%S") if j.criado_em else "-",
+                }
+                for j in jobs_recentes
+            ])
+            st.dataframe(df_jobs, use_container_width=True, hide_index=True, height=210)
+
+    with col_dossies_dir:
+        st.subheader("📄 Dossiês PDF Emitidos (`RelatorioDossieEBT`)")
+        dossies_recentes = (
+            session.query(RelatorioDossieEBT)
+            .filter(RelatorioDossieEBT.tenant_id == tenant_ativo.id)
+            .order_by(RelatorioDossieEBT.criado_em.desc())
+            .limit(15)
+            .all()
+        )
+        if not dossies_recentes:
+            st.caption("Nenhum Dossiê PDF emitido neste Tenant ainda.")
+        else:
+            df_dossies = pd.DataFrame([
+                {
+                    "Dossiê ID": d.id[:8],
+                    "SHA-256": f"{d.sha256_pdf[:12]}...",
+                    "Storage Key": d.storage_key.split("/")[-1],
+                    "Emitido em": d.criado_em.strftime("%d/%m %H:%M:%S") if d.criado_em else "-",
+                }
+                for d in dossies_recentes
+            ])
+            st.dataframe(df_dossies, use_container_width=True, hide_index=True, height=210)
+
+    st.markdown("---")
+
+    # 3. Links de Compartilhamento Somente-Leitura para Investidor / Banca
+    st.subheader("🔗 Data Room Externa: Links Temporários para Investidor / Banca")
+    col_link_esq, col_link_dir = st.columns(2)
+
+    with col_link_esq:
+        with st.form("form_gerar_share_link"):
+            dias_exp = st.number_input("Validade do Link (Dias)", min_value=1, max_value=90, value=7)
+            btn_gerar_link = st.form_submit_button("🔑 Gerar Token de Acesso Somente-Leitura")
+            if btn_gerar_link:
+                try:
+                    token_gerado, obj_link = criar_link_compartilhamento_investidor(
+                        session,
+                        membership=membership_ativa,
+                        ebt_id=projeto.id,
+                        dias_validade=int(dias_exp),
+                    )
+                    session.commit()
+                    st.success("✅ Token temporário gerado (apenas o hash SHA-256 foi salvo no banco):")
+                    st.code(token_gerado, language="text")
+                except ErroPermissaoRBAC as erro_rbac:
+                    session.rollback()
+                    st.error(f"🔒 {erro_rbac}")
+
+    with col_link_dir:
+        with st.form("form_validar_share_link"):
+            token_para_validar = st.text_input("Validar Token Recebido de Investidor:")
+            btn_validar_link = st.form_submit_button("🔍 Verificar Validade e Registrar Acesso")
+            if btn_validar_link and token_para_validar:
+                try:
+                    link_ok = validar_token_investidor(session, token_claro=token_para_validar.strip())
+                    session.commit()
+                    st.success(
+                        f"✅ Token válido para a EBT `{link_ok.ebt_id[:8]}...`! "
+                        f"Acessos contabilizados: **{link_ok.acessos_realizados}** "
+                        f"(Expira em: {link_ok.expira_em.strftime('%d/%m/%Y %H:%M UTC')})."
+                    )
+                except PermissionError as erro_link:
+                    session.rollback()
+                    st.error(f"❌ {erro_link}")
+
+    st.markdown("---")
+
+    # 4. Trilha de Auditoria Imutável (AuditLog)
+    st.subheader("📜 Trilha de Auditoria Imutável do Tenant (`AuditLog`)")
+    eventos_auditoria = listar_trilha_auditoria(session, limite=50)
+    if not eventos_auditoria:
+        st.info("Nenhum evento de auditoria registrado até o momento.")
+    else:
+        tabela_audit = pd.DataFrame([
+            {
+                "Data/Hora (UTC)": ev.criado_em.strftime("%d/%m/%Y %H:%M:%S") if ev.criado_em else "-",
+                "Ação": ev.acao,
+                "Entidade": ev.entidade_tipo,
+                "Resumo Operacional": ev.resumo,
+                "Usuário": ev.user_id[:8] if ev.user_id else "sistema",
+            }
+            for ev in eventos_auditoria
+        ])
+        st.dataframe(tabela_audit, use_container_width=True, hide_index=True, height=260)
+
+    # 5. Políticas Row-Level Security (PostgreSQL DDL)
+    with st.expander("🗄️ Visualizar Script SQL de Row-Level Security (PostgreSQL RLS)"):
+        ddl_rls = gerar_ddl_rls_postgresql()
+        st.code(ddl_rls, language="sql")
+
+try:
+    session.commit()
+    session.close()
+except Exception:
+    session.rollback()
+    session.close()

@@ -1,17 +1,28 @@
 import os
 import platform
+import sqlite3
 from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey, Text, Boolean, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
+from sqlalchemy.pool import NullPool
 
 # ==========================================
-# 🛡️ INTEGRIDADE SQLITE (FK ON)
+# 🛡️ INTEGRIDADE SQLITE (FK ON + WAL + BUSY TIMEOUT)
 # ==========================================
-@event.listens_for(Engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
+    # Executa PRAGMAs exclusivamente em conexões nativas SQLite (nunca em PostgreSQL/psycopg2)
+    if not isinstance(dbapi_connection, sqlite3.Connection):
+        return
     cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.close()
+    try:
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+    except Exception:
+        pass
+    finally:
+        cursor.close()
 
 Base = declarative_base()
 
@@ -172,7 +183,13 @@ app_data_path = _get_app_data_path()
 os.makedirs(app_data_path, exist_ok=True)
 db_path = os.path.join(app_data_path, "startup_plan.db")
 
-engine  = create_engine(f"sqlite:///{db_path}", echo=False)
+engine  = create_engine(
+    f"sqlite:///{db_path}",
+    echo=False,
+    poolclass=NullPool,
+    connect_args={"check_same_thread": False, "timeout": 30},
+)
+event.listen(engine, "connect", set_sqlite_pragma)
 Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 session = Session()

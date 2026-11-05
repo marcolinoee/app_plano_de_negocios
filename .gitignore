@@ -1,8 +1,20 @@
 .venv/
 __pycache__/
+*.pyc
+*.zip
+*.rar
+*.exe
+*.spec
+.database/
 *.db
+*.db-wal
+*.db-shm
+.env
+.vscode/
+.storage_dossies/
 build/
 dist/
-*.spec
-.streamlit/
-*.pdf
+Nova pasta/
+Dossie_*.pdf
+frontend/node_modules/
+frontend/dist/

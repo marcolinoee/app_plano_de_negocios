@@ -1,6 +1,31 @@
 from dataclasses import dataclass, field
 from typing import List
 
+# Re-exporta o motor financeiro SaaS Pydantic puro (Fase 0)
+from core_financeiro import (
+    VERSAO_MOTOR,
+    AlertaSanidade,
+    DREBaseMensal,
+    EntradaSimulacaoSaaS,
+    ItemCapexInput,
+    ItemOpexInput,
+    MetricasUnitEconomics,
+    MetricasViabilidade,
+    PlanoSaaSInput,
+    PremissasInput,
+    ResultadoComparacaoCenarios,
+    ResultadoMonteCarlo,
+    ResultadoSimulacaoSaaS,
+    SerieTemporalSimulacao,
+    SeveridadeAlerta,
+    TipoCenario,
+    contar_mudancas_sinal,
+    executar_simulacao_saas,
+    simular_cenarios_padrao,
+    simular_monte_carlo,
+    validar_sanidade_simulacao,
+)
+
 # --- ENTIDADES BÁSICAS ---
 
 @dataclass

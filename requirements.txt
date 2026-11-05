@@ -1,9 +1,15 @@
 streamlit
 pandas
 SQLAlchemy
+numpy
 numpy-financial
+scipy
 plotly
 google-generativeai
 google-genai
 fpdf2
 kaleido==1.2.0
+fastapi
+uvicorn[standard]
+pydantic
+psycopg2-binary

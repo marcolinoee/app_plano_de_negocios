@@ -569,7 +569,7 @@ class AnaliseIAEBT(BaseSaaS):
         nullable=True,
     )
     provedor = Column(String(40), nullable=False, default="google-gemini")
-    modelo = Column(String(80), nullable=False, default="gemini-2.5-flash")
+    modelo = Column(String(80), nullable=False, default="gemini-3.8")
     versao_prompt = Column(String(30), nullable=False, default="v1.0-vc-comite")
     hash_entrada_simulacao = Column(String(64), nullable=False, index=True)
     parecer_gerado_md = Column(Text, nullable=False)

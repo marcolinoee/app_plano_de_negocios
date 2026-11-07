@@ -15,6 +15,17 @@ import base64
 import os
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
+try:
+    from fastapi import Depends, FastAPI, Header, HTTPException, Response
+    from fastapi.middleware.cors import CORSMiddleware
+except ImportError:
+    Depends = Any  # type: ignore
+    FastAPI = Any  # type: ignore
+    Header = Any  # type: ignore
+    HTTPException = Exception  # type: ignore
+    Response = Any  # type: ignore
+    CORSMiddleware = Any  # type: ignore
+
 from pydantic import BaseModel, Field
 
 from core_financeiro import (
@@ -40,10 +51,12 @@ from .auth_oauth import (
     criar_convite_rbac_oauth,
     criar_usuario_pelo_admin,
     decodificar_jwt_sessao_saas,
+    excluir_usuario_pelo_admin,
     garantir_superadmin_inicial,
     gerenciar_assinante_oauth_pelo_admin,
     listar_provedores_oauth_configurados,
     listar_usuarios_oauth_registrados,
+    obter_uso_usuario_pelo_admin,
     registrar_novo_usuario_credenciais,
     trocar_codigo_oauth_por_perfil,
 )
@@ -55,9 +68,12 @@ from .filas_e_storage import (
     registrar_emissao_dossie_pdf,
 )
 from .ia_governanca import (
+    CASCATA_MODELOS_GEMINI,
+    ErroIA,
     ProvedorAuditoriaDeterministicoIA,
     ProvedorGeminiIA,
     construir_prompt_vc_governado,
+    obter_geracao_modelo,
     revisar_e_aprovar_parecer_ia,
     solicitar_parecer_ia_governado,
 )
@@ -193,6 +209,7 @@ class GerenciarAssinanteOAuthRequest(BaseModel):
     ebt_restrita_id: Optional[str] = None
     ativo: Optional[bool] = None
     nome_completo: Optional[str] = None
+    email: Optional[str] = None
     cargo_organizacao: Optional[str] = None
     telefone_whatsapp: Optional[str] = None
 
@@ -270,7 +287,9 @@ class JuridicoUpdateRequest(BaseModel):
 class SolicitarParecerIARequest(BaseModel):
     usar_gemini: bool = False
     gemini_api_key: Optional[str] = None
+    modelo_gemini: Optional[str] = "gemini-3.8"
     forcar_regeneracao: bool = False
+    permitir_fallback_copiloto: bool = False
 
 
 class AnaliseIAResponse(BaseModel):
@@ -279,6 +298,9 @@ class AnaliseIAResponse(BaseModel):
     ebt_id: str
     provedor: str
     modelo: str
+    modelo_resolvido: Optional[str] = None
+    tentativas_executadas: int = 1
+    geracao_resolvida: Optional[str] = None
     versao_prompt: str
     hash_entrada_simulacao: str
     parecer_gerado_md: str
@@ -286,6 +308,7 @@ class AnaliseIAResponse(BaseModel):
     aprovado_pelo_consultor: bool
     custo_estimado_usd: float
     em_cache: bool = False
+    fallback_acionado: bool = False
 
 
 class AprovarParecerIARequest(BaseModel):
@@ -344,7 +367,7 @@ def criar_app_fastapi(database_url: Optional[str] = None) -> Any:
     CORS, autenticação OAuth2/JWT e sessão SQLAlchemy isolada por Tenant (RLS).
     """
     try:
-        from fastapi import Depends, FastAPI, Header, HTTPException
+        from fastapi import Depends, FastAPI, Header, HTTPException, Response
         from fastapi.middleware.cors import CORSMiddleware
     except ImportError as exc:
         raise RuntimeError(
@@ -417,6 +440,16 @@ def criar_app_fastapi(database_url: Optional[str] = None) -> Any:
         return user, membership, claims
 
     def _mapear_excecao_negocio(exc: Exception) -> HTTPException:
+        if isinstance(exc, ErroIA):
+            return HTTPException(
+                status_code=exc.status_http,
+                detail={
+                    "codigo_erro": exc.codigo_erro,
+                    "mensagem_amigavel": exc.mensagem_amigavel,
+                    "detalhe_tecnico": exc.detalhe_tecnico,
+                    "suporta_offline": True,
+                },
+            )
         if isinstance(exc, (ErroPermissaoRBAC, PermissionError)):
             return HTTPException(status_code=403, detail=str(exc))
         if isinstance(exc, ErroLimitePlanoSaaS):
@@ -427,6 +460,7 @@ def criar_app_fastapi(database_url: Optional[str] = None) -> Any:
 
     # ── 1. Operação & Motor Puro ──────────────────────────────────────────────
 
+    @app.get("/health", response_model=HealthcheckResponse, include_in_schema=False)
     @app.get("/v1/health", response_model=HealthcheckResponse, tags=["Operação"])
     def healthcheck() -> HealthcheckResponse:
         return HealthcheckResponse()
@@ -782,8 +816,51 @@ def criar_app_fastapi(database_url: Optional[str] = None) -> Any:
                 ebt_restrita_id=req.ebt_restrita_id,
                 ativo=req.ativo,
                 nome_completo=req.nome_completo,
+                email=req.email,
                 cargo_organizacao=req.cargo_organizacao,
                 telefone_whatsapp=req.telefone_whatsapp,
+            )
+        except Exception as exc:
+            raise _mapear_excecao_negocio(exc) from exc
+
+    @app.delete(
+        "/v1/admin/usuarios/{membership_id}",
+        tags=["Autenticação & RBAC"],
+    )
+    def endpoint_excluir_usuario_admin(
+        membership_id: str,
+        ctx: Tuple[User, Membership, Dict[str, Any]] = Depends(
+            obter_contexto_autenticado
+        ),
+        db: Any = Depends(obter_db),
+    ) -> Dict[str, Any]:
+        _, membership_admin, _ = ctx
+        try:
+            return excluir_usuario_pelo_admin(
+                db,
+                membership_admin=membership_admin,
+                membership_alvo_id=membership_id,
+            )
+        except Exception as exc:
+            raise _mapear_excecao_negocio(exc) from exc
+
+    @app.get(
+        "/v1/admin/usuarios/{membership_id}/uso",
+        tags=["Autenticação & RBAC"],
+    )
+    def endpoint_obter_uso_usuario_admin(
+        membership_id: str,
+        ctx: Tuple[User, Membership, Dict[str, Any]] = Depends(
+            obter_contexto_autenticado
+        ),
+        db: Any = Depends(obter_db),
+    ) -> Dict[str, Any]:
+        _, membership_admin, _ = ctx
+        try:
+            return obter_uso_usuario_pelo_admin(
+                db,
+                membership_admin=membership_admin,
+                membership_alvo_id=membership_id,
             )
         except Exception as exc:
             raise _mapear_excecao_negocio(exc) from exc
@@ -1218,6 +1295,8 @@ def criar_app_fastapi(database_url: Optional[str] = None) -> Any:
                             "id": ultima_ia.id,
                             "provedor": ultima_ia.provedor,
                             "modelo": ultima_ia.modelo,
+                            "modelo_resolvido": ultima_ia.modelo,
+                            "geracao_resolvida": obter_geracao_modelo(ultima_ia.modelo),
                             "versao_prompt": ultima_ia.versao_prompt,
                             "hash_entrada_simulacao": ultima_ia.hash_entrada_simulacao,
                             "parecer_gerado_md": ultima_ia.parecer_gerado_md,
@@ -1615,6 +1694,7 @@ def criar_app_fastapi(database_url: Optional[str] = None) -> Any:
     def endpoint_solicitar_parecer_ia(
         ebt_id: str,
         req: SolicitarParecerIARequest,
+        response: Response,
         ctx: Tuple[User, Membership, Dict[str, Any]] = Depends(
             obter_contexto_autenticado
         ),
@@ -1622,8 +1702,15 @@ def criar_app_fastapi(database_url: Optional[str] = None) -> Any:
     ) -> AnaliseIAResponse:
         _, membership, _ = ctx
         try:
+            modelo_inicial = (
+                req.modelo_gemini
+                or os.getenv("GEMINI_MODEL", "gemini-4-argon")
+            )
             provedor = (
-                ProvedorGeminiIA(api_key=req.gemini_api_key)
+                ProvedorGeminiIA(
+                    api_key=req.gemini_api_key,
+                    modelo=modelo_inicial,
+                )
                 if (req.usar_gemini and req.gemini_api_key)
                 else ProvedorAuditoriaDeterministicoIA()
             )
@@ -1633,13 +1720,35 @@ def criar_app_fastapi(database_url: Optional[str] = None) -> Any:
                 ebt_id=ebt_id,
                 provedor_ia=provedor,
                 forcar_regeneracao=req.forcar_regeneracao,
+                permitir_fallback_copiloto=req.permitir_fallback_copiloto,
             )
+            eh_fallback = "fallback" in str(analise.provedor or "").lower()
+            modelo_resolvido = (
+                getattr(analise, "modelo_resolvido", None)
+                or analise.modelo
+                or modelo_inicial
+            )
+            tentativas_executadas = (
+                getattr(analise, "tentativas_executadas", 1) or 1
+            )
+            geracao_resolvida = (
+                getattr(analise, "geracao_resolvida", None)
+                or obter_geracao_modelo(modelo_resolvido)
+            )
+
+            # Headers HTTP obrigatórios para rastreabilidade e telemetria
+            response.headers["x-resolved-by-model"] = modelo_resolvido
+            response.headers["x-attempts"] = str(tentativas_executadas)
+
             return AnaliseIAResponse(
                 id=analise.id,
                 tenant_id=analise.tenant_id,
                 ebt_id=analise.ebt_id,
                 provedor=analise.provedor,
                 modelo=analise.modelo,
+                modelo_resolvido=modelo_resolvido,
+                tentativas_executadas=tentativas_executadas,
+                geracao_resolvida=geracao_resolvida,
                 versao_prompt=analise.versao_prompt,
                 hash_entrada_simulacao=analise.hash_entrada_simulacao,
                 parecer_gerado_md=analise.parecer_gerado_md,
@@ -1647,6 +1756,7 @@ def criar_app_fastapi(database_url: Optional[str] = None) -> Any:
                 aprovado_pelo_consultor=analise.aprovado_pelo_consultor,
                 custo_estimado_usd=analise.custo_estimado_usd,
                 em_cache=veio_do_cache,
+                fallback_acionado=eh_fallback,
             )
         except Exception as exc:
             raise _mapear_excecao_negocio(exc) from exc

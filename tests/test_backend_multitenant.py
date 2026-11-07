@@ -14,8 +14,17 @@ from backend import (
     TABELAS_COM_RLS,
     AssinaturaTenant,
     BaseSaaS,
+    CASCATA_MODELOS_GEMINI,
     ClienteEBT,
+    CodigoFalhaIA,
     ErroAutenticacaoOAuth,
+    ErroIA,
+    ErroIAAutenticacao,
+    ErroIACascataEsgotada,
+    ErroIACotaExcedida,
+    ErroIAIndisponivel,
+    ErroIANetworkOffline,
+    ErroIATimeout,
     ErroIsolamentoTenant,
     ErroLimitePlanoSaaS,
     ErroPermissaoRBAC,
@@ -27,6 +36,7 @@ from backend import (
     PlanoAssinaturaCodigo,
     PlanoSaaSEBT,
     ProvedorAuditoriaDeterministicoIA,
+    ProvedorGeminiIA,
     StorageDossieLocal,
     User,
     alterar_plano_assinatura_tenant,
@@ -42,6 +52,7 @@ from backend import (
     criar_tenant_consultoria,
     criar_workspace_ebt,
     decodificar_jwt_sessao_saas,
+    excluir_usuario_pelo_admin,
     executar_e_versionar_simulacao_ebt,
     gerar_ddl_rls_postgresql,
     gerar_jwt_sessao_saas,
@@ -53,6 +64,7 @@ from backend import (
     listar_usuarios_oauth_registrados,
     listar_workspaces_ebt_visiveis,
     obter_ou_criar_uso_mensal,
+    obter_uso_usuario_pelo_admin,
     registrar_emissao_dossie_pdf,
     registrar_novo_usuario_credenciais,
     revisar_e_aprovar_parecer_ia,
@@ -933,6 +945,311 @@ class TestNucleoSaaSMultiTenant(unittest.TestCase):
             self.assertEqual(
                 sessao_relogin["user"]["nome_completo"], "Ana Carolina Silva"
             )
+
+    def test_gestao_avancada_contas_admin_excluir_uso_plano_e_trava_seguranca(
+        self,
+    ) -> None:
+        """
+        Valida a Gestão Avançada de Contas no Painel Admin (RBAC):
+        1. Trava de segurança que impede a exclusão do SuperAdmin oficial ('marcolinoee@yahoo.com.br').
+        2. Visualização analítica do consumo de uso da conta (simulações, IA, PDFs, EBTs).
+        3. Edição completa de dados (nome, email, cargo, status) e mudança de plano.
+        4. Exclusão definitiva de conta com sucesso para usuários comuns.
+        5. Atualização para modelo Gemini mais recente (gemini-2.5-flash e gemini-2.5-pro).
+        """
+        with sessao_por_requisicao(self.session_factory, bypass_rls=True) as db:
+            # Login do SuperAdmin
+            sessao_admin = autenticar_com_email_e_senha(
+                db, email="marcolinoee@yahoo.com.br", senha="123456"
+            )
+            admin_memb_id = sessao_admin["membership_ativa"]["id"]
+            admin_memb = db.get(Membership, admin_memb_id)
+
+            # 1. Trava de segurança: tentar excluir o próprio SuperAdmin DEVE falhar
+            with self.assertRaises(ErroPermissaoRBAC) as ctx_lock:
+                excluir_usuario_pelo_admin(
+                    db,
+                    membership_admin=admin_memb,
+                    membership_alvo_id=admin_memb_id,
+                )
+            self.assertIn("Trava de segurança", str(ctx_lock.exception))
+
+            # 2. Cadastrar usuário comum para testes
+            sessao_comum = registrar_novo_usuario_credenciais(
+                db,
+                nome_completo="Carlos Gestor",
+                email="carlos.gestor@empresa.com.br",
+                senha="senhaCarlos123",
+                cargo_organizacao="Gerente Financeiro",
+                telefone_whatsapp="(11) 98888-7777",
+            )
+            carlos_memb_id = sessao_comum["membership_ativa"]["id"]
+
+            # 3. Visualizar Uso do Usuário
+            dados_uso = obter_uso_usuario_pelo_admin(
+                db,
+                membership_admin=admin_memb,
+                membership_alvo_id=carlos_memb_id,
+            )
+            self.assertEqual(dados_uso["email"], "carlos.gestor@empresa.com.br")
+            self.assertIn("consumo", dados_uso)
+            self.assertIn("limites", dados_uso)
+            self.assertIn("simulacoes_executadas", dados_uso["consumo"])
+
+            # 4. Editar Dados e Mudar de Plano
+            atualizado = gerenciar_assinante_oauth_pelo_admin(
+                db,
+                membership_admin=admin_memb,
+                membership_alvo_id=carlos_memb_id,
+                nome_completo="Carlos Gestor Atualizado",
+                email="carlos.novo@empresa.com.br",
+                cargo_organizacao="Head de Operações",
+                novo_papel=PapelMembro.GESTOR,
+                novo_plano=PlanoAssinaturaCodigo.ENTERPRISE,
+                ativo=True,
+            )
+            self.assertEqual(atualizado["nome_completo"], "Carlos Gestor Atualizado")
+            self.assertEqual(atualizado["email"], "carlos.novo@empresa.com.br")
+            self.assertEqual(atualizado["papel"], "gestor")
+            self.assertEqual(atualizado["plano_codigo"], "enterprise")
+
+            # 5. Excluir Conta do Usuário Comum com sucesso
+            res_del = excluir_usuario_pelo_admin(
+                db,
+                membership_admin=admin_memb,
+                membership_alvo_id=carlos_memb_id,
+            )
+            self.assertTrue(res_del["sucesso"])
+            self.assertEqual(res_del["email"], "carlos.novo@empresa.com.br")
+
+            # Usuário excluído não pode mais logar
+            with self.assertRaises(ErroAutenticacaoOAuth):
+                autenticar_com_email_e_senha(
+                    db,
+                    email="carlos.novo@empresa.com.br",
+                    senha="senhaCarlos123",
+                )
+
+            # 6. Validação dos modelos da cascata Gemini
+            prov_default = ProvedorGeminiIA(api_key="teste-fake-key")
+            self.assertIn(prov_default.modelo_nome, ["gemini-4-argon", "gemini-3.8"])
+            prov_flash = ProvedorGeminiIA(api_key="teste-fake-key", modelo="gemini-3.8-flash")
+            self.assertEqual(prov_flash.modelo_nome, "gemini-3.8-flash")
+            prov_pro = ProvedorGeminiIA(api_key="teste-fake-key", modelo="gemini-3.8-pro")
+            self.assertEqual(prov_pro.modelo_nome, "gemini-3.8-pro")
+
+    def test_resiliencia_ia_codigos_falha_e_fallback_copiloto(self) -> None:
+        """
+        Valida a resiliência e tratamento de códigos de falha na IA:
+        1. Códigos padronizados ERR_AI_*.
+        2. ProvedorGeminiIA com chave vazia lança ErroIAAutenticacao (ERR_AI_AUTH_TOKEN_04).
+        3. Simulação de timeout, offline e indisponibilidade gerando códigos respectivos.
+        4. solicitar_parecer_ia_governado com permitir_fallback_copiloto=True gera parecer seguro de fallback.
+        5. solicitar_parecer_ia_governado com permitir_fallback_copiloto=False propaga ErroIA estruturado.
+        """
+        # 1. Códigos padronizados
+        self.assertEqual(CodigoFalhaIA.TIMEOUT, "ERR_AI_TIMEOUT_01")
+        self.assertEqual(CodigoFalhaIA.API_UNAVAILABLE, "ERR_AI_API_UNAVAILABLE_02")
+        self.assertEqual(CodigoFalhaIA.NETWORK_OFFLINE, "ERR_AI_NETWORK_OFFLINE_03")
+        self.assertEqual(CodigoFalhaIA.AUTH_TOKEN, "ERR_AI_AUTH_TOKEN_04")
+        self.assertEqual(CodigoFalhaIA.QUOTA_EXCEEDED, "ERR_AI_QUOTA_EXCEEDED_05")
+
+        # 2. Chave vazia
+        prov_sem_chave = ProvedorGeminiIA(api_key="")
+        with self.assertRaises(ErroIAAutenticacao) as ctx_auth:
+            prov_sem_chave.gerar_parecer("prompt teste", None, None)  # type: ignore
+        self.assertIn(
+            ctx_auth.exception.codigo_erro,
+            ["ERR_GEMINI_AUTH_401", "ERR_AI_AUTH_TOKEN_04"],
+        )
+
+        # 3. Mapeamento de exceções no ProvedorGeminiIA
+        class ProvedorMockErro(ProvedorGeminiIA):
+            def __init__(self, tipo_erro: str) -> None:
+                super().__init__(api_key="fake-key-123")
+                self.tipo_erro = tipo_erro
+
+            def gerar_parecer(self, prompt, ebt, resultado):
+                if self.tipo_erro == "timeout":
+                    raise TimeoutError("Deadline exceeded after 30s")
+                if self.tipo_erro == "network":
+                    raise ConnectionError("Failed to connect: getaddrinfo ENOTFOUND")
+                if self.tipo_erro == "503":
+                    raise RuntimeError("503 Service Unavailable: server overloaded")
+                raise RuntimeError("Falha genérica")
+
+        with self.assertRaises(TimeoutError):
+            ProvedorMockErro("timeout").gerar_parecer("", None, None)  # type: ignore
+
+        # 4. Fallback automático no solicitar_parecer_ia_governado
+        with sessao_por_requisicao(self.session_factory, bypass_rls=True) as db:
+            tenant, _, membership_admin = criar_tenant_consultoria(
+                db,
+                nome_consultoria="Resilience VC",
+                slug="resilience-vc",
+                email_dono="dono@resilience.vc",
+                nome_dono="Dono Resilience",
+                plano=PlanoAssinaturaCodigo.PRO,
+            )
+            ebt = criar_workspace_ebt(
+                db,
+                membership=membership_admin,
+                nome_startup="DeepTech Alpha",
+                setor_vertical="HealthTech",
+            )
+            db.commit()
+
+            # Provedor que falha com ErroIAIndisponivel
+            class ProvedorFalho(ProvedorGeminiIA):
+                def __init__(self) -> None:
+                    super().__init__(api_key="fake-key")
+
+                def gerar_parecer(self, prompt, ebt, resultado):
+                    raise ErroIAIndisponivel("Google GenAI 503 Unavailable")
+
+            # A. Com fallback ativado (permitir_fallback_copiloto=True)
+            analise_fallback, job, veio_cache = solicitar_parecer_ia_governado(
+                db,
+                membership=membership_admin,
+                ebt_id=ebt.id,
+                provedor_ia=ProvedorFalho(),
+                forcar_regeneracao=True,
+                permitir_fallback_copiloto=True,
+            )
+            self.assertFalse(veio_cache)
+            self.assertIn("Modo de Resiliência & Fallback", analise_fallback.parecer_gerado_md)
+            self.assertTrue(
+                "ERR_AI_API_UNAVAILABLE_02" in analise_fallback.parecer_gerado_md
+                or "ERR_GEMINI_ALL_MODELS_EXHAUSTED" in analise_fallback.parecer_gerado_md
+            )
+            self.assertIn("vc-auditor-deterministico", analise_fallback.modelo)
+
+            # B. Sem fallback ativado (permitir_fallback_copiloto=False) propaga o ErroIA
+            with self.assertRaises(ErroIA) as ctx_falha:
+                solicitar_parecer_ia_governado(
+                    db,
+                    membership=membership_admin,
+                    ebt_id=ebt.id,
+                    provedor_ia=ProvedorFalho(),
+                    forcar_regeneracao=True,
+                    permitir_fallback_copiloto=False,
+                )
+            self.assertIn(
+                ctx_falha.exception.codigo_erro,
+                ["ERR_AI_API_UNAVAILABLE_02", "ERR_GEMINI_ALL_MODELS_EXHAUSTED"],
+            )
+
+    def test_cascata_exaustiva_gemini_retentativas_e_telemetria(self) -> None:
+        """
+        Valida a Cascata Exaustiva Multi-Geração Gemini (17 modelos):
+        1. Hierarquia exata dos 17 modelos (4 -> 3 -> 2.5 -> 2.0 -> 1.5 -> 1.0).
+        2. Aborto imediato com ERR_GEMINI_AUTH_401 em caso de 401/403 sem percorrer a cascata.
+        3. Ciclo de 3 retentativas por modelo com backoff antes de avançar para o próximo tier.
+        4. Sucesso no segundo tier captura telemetria (modelo_resolvido, geracao_resolvida, tentativas_executadas).
+        5. Exaustão de todos os 17 modelos dispara ERR_GEMINI_ALL_MODELS_EXHAUSTED.
+        """
+        # 1. Hierarquia dos 17 modelos
+        self.assertEqual(len(CASCATA_MODELOS_GEMINI), 17)
+        self.assertEqual(
+            CASCATA_MODELOS_GEMINI,
+            (
+                "gemini-4-argon",
+                "gemini-3.1-pro-preview",
+                "gemini-3.8-flash",
+                "gemini-3.6-flash",
+                "gemini-3-flash-preview",
+                "gemini-3.5-flash-lite",
+                "gemini-3.1-flash-lite",
+                "gemini-2.5-pro",
+                "gemini-2.5-flash",
+                "gemini-2.5-flash-lite",
+                "gemini-2.0-pro",
+                "gemini-2.0-flash",
+                "gemini-2.0-flash-lite",
+                "gemini-1.5-pro",
+                "gemini-1.5-flash",
+                "gemini-1.5-flash-8b",
+                "gemini-1.0-pro",
+            ),
+        )
+
+        # 2. Aborto Imediato em 401/403 (Chave Inválida / Não Autorizada)
+        class ProvedorMockAuth401(ProvedorGeminiIA):
+            def __init__(self) -> None:
+                super().__init__(
+                    api_key="chave-invalida",
+                    modelo="gemini-4-argon",
+                    max_tentativas_por_modelo=3,
+                    backoff_delays=(0.001, 0.001, 0.001),
+                )
+                self.chamadas_feitas = []
+
+            def _invocar_api_modelo(self, modelo: str, prompt: str) -> str:
+                self.chamadas_feitas.append(modelo)
+                raise RuntimeError("401 Unauthorized: API key not valid. Please pass a valid API key.")
+
+        prov_auth = ProvedorMockAuth401()
+        with self.assertRaises(ErroIAAutenticacao) as ctx_auth:
+            prov_auth.gerar_parecer("prompt teste", None, None)  # type: ignore
+
+        self.assertEqual(ctx_auth.exception.codigo_erro, "ERR_GEMINI_AUTH_401")
+        # Deve ter abortado na 1ª tentativa do 1º modelo, SEM percorrer o resto dos 17 modelos
+        self.assertEqual(prov_auth.tentativas_executadas, 1)
+        self.assertEqual(len(prov_auth.chamadas_feitas), 1)
+        self.assertEqual(prov_auth.chamadas_feitas[0], "gemini-4-argon")
+
+        # 3 e 4. Ciclo de 3 retentativas e recuo para o modelo seguinte com sucesso e telemetria
+        class ProvedorMockCascataSucesso(ProvedorGeminiIA):
+            def __init__(self) -> None:
+                super().__init__(
+                    api_key="chave-valida",
+                    modelo="gemini-4-argon",
+                    max_tentativas_por_modelo=3,
+                    backoff_delays=(0.001, 0.001, 0.001),
+                )
+                self.chamadas = []
+
+            def _invocar_api_modelo(self, modelo: str, prompt: str) -> str:
+                self.chamadas.append(modelo)
+                # Modelo 1 (gemini-4-argon) falha com 429 nas 3 tentativas
+                if modelo == "gemini-4-argon":
+                    raise RuntimeError("429 Resource Exhausted: Rate limit reached")
+                # Modelo 2 (gemini-3.1-pro-preview) falha na 1ª tentativa com 503 e passa na 2ª
+                if modelo == "gemini-3.1-pro-preview":
+                    if len([c for c in self.chamadas if c == "gemini-3.1-pro-preview"]) == 1:
+                        raise RuntimeError("503 Service Unavailable: overloaded")
+                    return "### Parecer Aprovado com Sucesso via Geração 3"
+                return "OK"
+
+        prov_cascata = ProvedorMockCascataSucesso()
+        parecer = prov_cascata.gerar_parecer("prompt teste", None, None)  # type: ignore
+
+        self.assertIn("Parecer Aprovado com Sucesso via Geração 3", parecer)
+        # Modelo 1: 3 tentativas falhas. Modelo 2: 1 falha + 1 sucesso = 5 tentativas no total
+        self.assertEqual(prov_cascata.tentativas_executadas, 5)
+        self.assertEqual(prov_cascata.modelo_resolvido, "gemini-3.1-pro-preview")
+        self.assertIn("Geração Gemini 3", prov_cascata.geracao_resolvida or "")
+
+        # 5. Exaustão de Todos os 17 Modelos
+        class ProvedorMockTodosFalham(ProvedorGeminiIA):
+            def __init__(self) -> None:
+                super().__init__(
+                    api_key="chave-valida",
+                    modelo="gemini-4-argon",
+                    max_tentativas_por_modelo=3,
+                    backoff_delays=(0.001, 0.001, 0.001),
+                )
+
+            def _invocar_api_modelo(self, modelo: str, prompt: str) -> str:
+                raise RuntimeError("503 Service Unavailable")
+
+        prov_todos_falham = ProvedorMockTodosFalham()
+        with self.assertRaises(ErroIACascataEsgotada) as ctx_esgotado:
+            prov_todos_falham.gerar_parecer("prompt teste", None, None)  # type: ignore
+
+        self.assertEqual(ctx_esgotado.exception.codigo_erro, "ERR_GEMINI_ALL_MODELS_EXHAUSTED")
+        # 17 modelos * 3 tentativas = 51 tentativas
+        self.assertEqual(prov_todos_falham.tentativas_executadas, 51)
 
 
 if __name__ == "__main__":

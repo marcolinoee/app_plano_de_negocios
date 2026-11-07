@@ -78,7 +78,44 @@ export interface UsuarioOAuthRegistrado {
   tenant_slug: string;
   plano_codigo: PlanoCodigo;
   ebts_disponiveis: Array<{ id: string; nome_startup: string }>;
+  consumo_uso?: {
+    simulacoes_executadas: number;
+    analises_ia_realizadas: number;
+    pdfs_gerados: number;
+    custo_ia_usd: number;
+    total_ebts: number;
+    limite_ebts: number;
+    limite_analises_ia_mes: number;
+    limite_pdfs_mes: number;
+    ano_mes: string;
+  };
   criado_em?: string | null;
+}
+
+export interface UsoUsuarioDetalhado {
+  user_id: string;
+  membership_id: string;
+  email: string;
+  nome_completo: string;
+  papel: PapelRBAC;
+  plano_codigo: PlanoCodigo;
+  tenant_nome: string;
+  ativo: boolean;
+  consumo: {
+    simulacoes_executadas: number;
+    analises_ia_realizadas: number;
+    pdfs_gerados: number;
+    custo_ia_usd: number;
+    ano_mes: string;
+  };
+  limites: {
+    limite_ebts: number;
+    limite_analises_ia_mes: number;
+    limite_pdfs_mes: number;
+    permite_monte_carlo: boolean;
+    permite_white_label: boolean;
+  };
+  ebts: Array<{ id: string; nome_startup: string; ativo: boolean }>;
 }
 
 export interface WorkspaceEBTResumo {
@@ -222,6 +259,9 @@ export interface WorkspaceEBTCompleto {
       id: string;
       provedor: string;
       modelo: string;
+      modelo_resolvido?: string;
+      tentativas_executadas?: number;
+      geracao_resolvida?: string;
       versao_prompt: string;
       hash_entrada_simulacao: string;
       parecer_gerado_md: string;
@@ -230,4 +270,39 @@ export interface WorkspaceEBTCompleto {
       custo_estimado_usd: number;
     } | null;
   };
+}
+
+export type CodigoFalhaIA =
+  | "ERR_GEMINI_ALL_MODELS_EXHAUSTED"
+  | "ERR_GEMINI_RATE_LIMIT_429"
+  | "ERR_GEMINI_TIMEOUT_504"
+  | "ERR_GEMINI_AUTH_401"
+  | "ERR_NETWORK_DISCONNECTED"
+  | "ERR_AI_TIMEOUT_01"
+  | "ERR_AI_API_UNAVAILABLE_02"
+  | "ERR_AI_NETWORK_OFFLINE_03"
+  | "ERR_AI_AUTH_TOKEN_04"
+  | "ERR_AI_QUOTA_EXCEEDED_05"
+  | "ERR_AI_GENERIC_FALLBACK_06";
+
+export interface ErroFalhaIA {
+  codigo_erro: CodigoFalhaIA | string;
+  mensagem_amigavel: string;
+  detalhe_tecnico?: string;
+  suporta_offline?: boolean;
+  status_http?: number;
+}
+
+export interface SolicitacaoIAPendenteOutbox {
+  id: string;
+  ebt_id: string;
+  ebt_nome: string;
+  timestamp: string;
+  usar_gemini: boolean;
+  modelo_gemini: string;
+  gemini_api_key?: string;
+  forcar_regeneracao: boolean;
+  codigo_erro: string;
+  mensagem_erro: string;
+  status: "pendente" | "sincronizando" | "falha" | "PENDING_SYNC";
 }

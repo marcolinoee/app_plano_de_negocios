@@ -1,14 +1,27 @@
 import React, { useEffect, useState } from "react";
-import { api, limparToken, obterTokenSalvo, salvarToken } from "./api";
+import {
+  api,
+  carregarOutboxIA,
+  limparOutboxIA,
+  limparToken,
+  obterTokenSalvo,
+  removerDoOutboxIA,
+  salvarNoOutboxIA,
+  salvarToken,
+} from "./api";
 import {
   GraficoCashflowValeDaMorte,
   GraficoMRRTracao,
   GraficoRoscaBurnRate,
 } from "./Charts";
 import {
+  CodigoFalhaIA,
+  ErroFalhaIA,
   PapelRBAC,
   PlanoCodigo,
   SessaoAutenticada,
+  SolicitacaoIAPendenteOutbox,
+  UsoUsuarioDetalhado,
   UsuarioOAuthRegistrado,
   WorkspaceEBTCompleto,
   WorkspaceEBTResumo,
@@ -51,6 +64,35 @@ const AVATARES_SUGERIDOS = [
   "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=200&auto=format&fit=crop&q=80",
   "https://images.unsplash.com/photo-1560250097-0b93528c311a?w=200&auto=format&fit=crop&q=80",
 ];
+
+function LogoMasterManagement({ className = "w-10 h-10" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      {/* Outer Executive Ring */}
+      <circle cx="24" cy="24" r="22" stroke="#3F3F46" strokeWidth="1.5" />
+      {/* Concentric Accents (Master Management) */}
+      <circle cx="24" cy="24" r="16.5" stroke="#E30000" strokeWidth="2.2" strokeDasharray="5 2.5" />
+      <circle cx="24" cy="24" r="11" stroke="#FFFFFF" strokeWidth="1.8" />
+      <circle cx="24" cy="24" r="5.5" stroke="#E30000" strokeWidth="2" />
+      {/* Central Core */}
+      <circle cx="24" cy="24" r="2.5" fill="#E30000" />
+    </svg>
+  );
+}
+
+function WatermarkLinhasGeometricas({ className = "w-64 h-64" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <circle cx="100" cy="100" r="95" stroke="#E30000" strokeWidth="1" strokeOpacity="0.15" />
+      <circle cx="100" cy="100" r="75" stroke="#FFFFFF" strokeWidth="1" strokeOpacity="0.08" strokeDasharray="4 6" />
+      <circle cx="100" cy="100" r="55" stroke="#E30000" strokeWidth="1.5" strokeOpacity="0.2" />
+      <circle cx="100" cy="100" r="35" stroke="#FFFFFF" strokeWidth="1" strokeOpacity="0.08" />
+      <circle cx="100" cy="100" r="15" stroke="#E30000" strokeWidth="2" strokeOpacity="0.3" strokeDasharray="3 3" />
+      <line x1="0" y1="100" x2="200" y2="100" stroke="#FFFFFF" strokeWidth="0.5" strokeOpacity="0.06" />
+      <line x1="100" y1="0" x2="100" y2="200" stroke="#FFFFFF" strokeWidth="0.5" strokeOpacity="0.06" />
+    </svg>
+  );
+}
 
 function validarFormatoEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
@@ -132,6 +174,38 @@ export default function App() {
     telefone_whatsapp: "",
   });
 
+  // Modais de Gestão Avançada de Contas no Painel Admin (RBAC)
+  const [usuarioModalEdicao, setUsuarioModalEdicao] =
+    useState<UsuarioOAuthRegistrado | null>(null);
+  const [formEdicaoUsuario, setFormEdicaoUsuario] = useState({
+    nome_completo: "",
+    email: "",
+    cargo_organizacao: "",
+    telefone_whatsapp: "",
+    papel: "assinante_free" as PapelRBAC,
+    plano_codigo: "free" as PlanoCodigo,
+    ativo: true,
+  });
+  const [salvandoEdicao, setSalvandoEdicao] = useState<boolean>(false);
+
+  const [usuarioModalUso, setUsuarioModalUso] =
+    useState<UsuarioOAuthRegistrado | null>(null);
+  const [dadosUsoDetalhado, setDadosUsoDetalhado] =
+    useState<UsoUsuarioDetalhado | null>(null);
+  const [carregandoUsoDetalhado, setCarregandoUsoDetalhado] =
+    useState<boolean>(false);
+
+  const [usuarioModalExclusao, setUsuarioModalExclusao] =
+    useState<UsuarioOAuthRegistrado | null>(null);
+  const [executandoExclusao, setExecutandoExclusao] = useState<boolean>(false);
+
+  const [usuarioModalPlano, setUsuarioModalPlano] =
+    useState<UsuarioOAuthRegistrado | null>(null);
+  const [novoPlanoSelecionado, setNovoPlanoSelecionado] =
+    useState<PlanoCodigo>("pro");
+  const [salvandoPlano, setSalvandoPlano] = useState<boolean>(false);
+
+  // Modais de Gestão Avançada de Contas no Painel Admin (RBAC)
   // Estados da Aba "Meu Perfil"
   const [formMeuPerfil, setFormMeuPerfil] = useState({
     nome_completo: "",
@@ -146,7 +220,11 @@ export default function App() {
   const [mostrarSenhaPerfil, setMostrarSenhaPerfil] = useState<boolean>(false);
   const [salvandoPerfil, setSalvandoPerfil] = useState<boolean>(false);
 
-  // Sidebar & Workspaces EBT
+  // Interface Executiva & Navegação (Top Navbar & Slide-Over Drawer & Modal)
+  const [drawerPerfilAberto, setDrawerPerfilAberto] = useState<boolean>(false);
+  const [modalNovaStartupAberto, setModalNovaStartupAberto] = useState<boolean>(false);
+
+  // Workspaces EBT e Seleção de Abas
   const [ebts, setEbts] = useState<WorkspaceEBTResumo[]>([]);
   const [ebtAtivaId, setEbtAtivaId] = useState<string>("");
   const [dadosEBT, setDadosEBT] = useState<WorkspaceEBTCompleto | null>(null);
@@ -210,6 +288,23 @@ export default function App() {
   const [forcarRegeneracaoIA, setForcarRegeneracaoIA] =
     useState<boolean>(false);
   const [chaveGemini, setChaveGemini] = useState<string>("");
+  const [modeloGemini, setModeloGemini] =
+    useState<string>("gemini-4-argon");
+  const [permitirFallbackAutomatico, setPermitirFallbackAutomatico] =
+    useState<boolean>(true);
+  const [alertaFalhaIA, setAlertaFalhaIA] = useState<ErroFalhaIA | null>(null);
+
+  // Estados de Conectividade e Outbox Offline para IA
+  const [redeOnline, setRedeOnline] = useState<boolean>(
+    typeof navigator !== "undefined" ? navigator.onLine : true
+  );
+  const [pendenciasOutbox, setPendenciasOutbox] = useState<
+    SolicitacaoIAPendenteOutbox[]
+  >(() => carregarOutboxIA());
+  const [sincronizandoOutbox, setSincronizandoOutbox] =
+    useState<boolean>(false);
+  const [mostrarModalOutbox, setMostrarModalOutbox] = useState<boolean>(false);
+
   const [textoHomologacaoIA, setTextoHomologacaoIA] = useState<string>("");
   const [exigirHomologacaoPDF, setExigirHomologacaoPDF] =
     useState<boolean>(false);
@@ -288,6 +383,471 @@ export default function App() {
     }
   }
 
+  function abrirModalEdicao(u: UsuarioOAuthRegistrado) {
+    setUsuarioModalEdicao(u);
+    setFormEdicaoUsuario({
+      nome_completo: u.nome_completo,
+      email: u.email,
+      cargo_organizacao: u.cargo_organizacao || "",
+      telefone_whatsapp: u.telefone_whatsapp || "",
+      papel: u.papel,
+      plano_codigo: u.plano_codigo,
+      ativo: u.ativo !== false,
+    });
+  }
+
+  async function abrirModalUso(u: UsuarioOAuthRegistrado) {
+    setUsuarioModalUso(u);
+    setCarregandoUsoDetalhado(true);
+    setDadosUsoDetalhado(null);
+    try {
+      const uso = await api.obterUsoUsuarioPeloAdmin(u.membership_id);
+      setDadosUsoDetalhado(uso);
+    } catch (err) {
+      notificarErro(err);
+    } finally {
+      setCarregandoUsoDetalhado(false);
+    }
+  }
+
+  function abrirModalPlano(u: UsuarioOAuthRegistrado) {
+    setUsuarioModalPlano(u);
+    setNovoPlanoSelecionado(u.plano_codigo);
+  }
+
+  function abrirModalExclusao(u: UsuarioOAuthRegistrado) {
+    setUsuarioModalExclusao(u);
+  }
+
+  async function handleSalvarEdicaoAvancada(e: React.FormEvent) {
+    e.preventDefault();
+    if (!usuarioModalEdicao) return;
+    if (!formEdicaoUsuario.nome_completo.trim()) {
+      notificarErro("O nome completo não pode ficar vazio.");
+      return;
+    }
+    if (!validarFormatoEmail(formEdicaoUsuario.email)) {
+      notificarErro("Informe um endereço de e-mail válido.");
+      return;
+    }
+    try {
+      setSalvandoEdicao(true);
+      await api.gerenciarAssinanteOAuthPeloAdmin(
+        usuarioModalEdicao.membership_id,
+        {
+          nome_completo: formEdicaoUsuario.nome_completo.trim(),
+          email: formEdicaoUsuario.email.trim().toLowerCase(),
+          cargo_organizacao: formEdicaoUsuario.cargo_organizacao.trim(),
+          telefone_whatsapp: formEdicaoUsuario.telefone_whatsapp.trim(),
+          novo_papel: formEdicaoUsuario.papel,
+          novo_plano: formEdicaoUsuario.plano_codigo,
+          ativo: formEdicaoUsuario.ativo,
+        }
+      );
+      setUsuarioModalEdicao(null);
+      await carregarUsuariosDoPainelRBAC();
+      const s = await api.obterSessaoAtual();
+      setSessao(s);
+      notificarSucesso(
+        `Dados de ${formEdicaoUsuario.nome_completo} atualizados com sucesso!`
+      );
+    } catch (err) {
+      notificarErro(err);
+    } finally {
+      setSalvandoEdicao(false);
+    }
+  }
+
+  async function handleSalvarMudancaPlano() {
+    if (!usuarioModalPlano) return;
+    try {
+      setSalvandoPlano(true);
+      await api.gerenciarAssinanteOAuthPeloAdmin(
+        usuarioModalPlano.membership_id,
+        {
+          novo_plano: novoPlanoSelecionado,
+        }
+      );
+      setUsuarioModalPlano(null);
+      await carregarUsuariosDoPainelRBAC();
+      const s = await api.obterSessaoAtual();
+      setSessao(s);
+      notificarSucesso(
+        `Plano de ${usuarioModalPlano.nome_completo} alterado para ${novoPlanoSelecionado.toUpperCase()} com sucesso!`
+      );
+    } catch (err) {
+      notificarErro(err);
+    } finally {
+      setSalvandoPlano(false);
+    }
+  }
+
+  async function handleConfirmarExclusaoUsuario() {
+    if (!usuarioModalExclusao) return;
+    try {
+      setExecutandoExclusao(true);
+      const res = await api.excluirUsuarioPeloAdmin(
+        usuarioModalExclusao.membership_id
+      );
+      setUsuarioModalExclusao(null);
+      await carregarUsuariosDoPainelRBAC();
+      notificarSucesso(
+        res.mensagem ||
+          `Conta de ${usuarioModalExclusao.nome_completo} excluída definitivamente com sucesso.`
+      );
+    } catch (err) {
+      notificarErro(err);
+    } finally {
+      setExecutandoExclusao(false);
+    }
+  }
+
+  function abrirModalEdicao(u: UsuarioOAuthRegistrado) {
+    setUsuarioModalEdicao(u);
+    setFormEdicaoUsuario({
+      nome_completo: u.nome_completo,
+      email: u.email,
+      cargo_organizacao: u.cargo_organizacao || "",
+      telefone_whatsapp: u.telefone_whatsapp || "",
+      papel: u.papel,
+      plano_codigo: u.plano_codigo,
+      ativo: u.ativo !== false,
+    });
+  }
+
+  async function abrirModalUso(u: UsuarioOAuthRegistrado) {
+    setUsuarioModalUso(u);
+    setCarregandoUsoDetalhado(true);
+    setDadosUsoDetalhado(null);
+    try {
+      const uso = await api.obterUsoUsuarioPeloAdmin(u.membership_id);
+      setDadosUsoDetalhado(uso);
+    } catch (err) {
+      notificarErro(err);
+    } finally {
+      setCarregandoUsoDetalhado(false);
+    }
+  }
+
+  function abrirModalPlano(u: UsuarioOAuthRegistrado) {
+    setUsuarioModalPlano(u);
+    setNovoPlanoSelecionado(u.plano_codigo);
+  }
+
+  function abrirModalExclusao(u: UsuarioOAuthRegistrado) {
+    setUsuarioModalExclusao(u);
+  }
+
+  async function handleSalvarEdicaoAvancada(e: React.FormEvent) {
+    e.preventDefault();
+    if (!usuarioModalEdicao) return;
+    if (!formEdicaoUsuario.nome_completo.trim()) {
+      notificarErro("O nome completo não pode ficar vazio.");
+      return;
+    }
+    if (!validarFormatoEmail(formEdicaoUsuario.email)) {
+      notificarErro("Informe um endereço de e-mail válido.");
+      return;
+    }
+    try {
+      setSalvandoEdicao(true);
+      await api.gerenciarAssinanteOAuthPeloAdmin(
+        usuarioModalEdicao.membership_id,
+        {
+          nome_completo: formEdicaoUsuario.nome_completo.trim(),
+          email: formEdicaoUsuario.email.trim().toLowerCase(),
+          cargo_organizacao: formEdicaoUsuario.cargo_organizacao.trim(),
+          telefone_whatsapp: formEdicaoUsuario.telefone_whatsapp.trim(),
+          novo_papel: formEdicaoUsuario.papel,
+          novo_plano: formEdicaoUsuario.plano_codigo,
+          ativo: formEdicaoUsuario.ativo,
+        }
+      );
+      setUsuarioModalEdicao(null);
+      await carregarUsuariosDoPainelRBAC();
+      const s = await api.obterSessaoAtual();
+      setSessao(s);
+      notificarSucesso(
+        `Dados de ${formEdicaoUsuario.nome_completo} atualizados com sucesso!`
+      );
+    } catch (err) {
+      notificarErro(err);
+    } finally {
+      setSalvandoEdicao(false);
+    }
+  }
+
+  async function handleSalvarMudancaPlano() {
+    if (!usuarioModalPlano) return;
+    try {
+      setSalvandoPlano(true);
+      await api.gerenciarAssinanteOAuthPeloAdmin(
+        usuarioModalPlano.membership_id,
+        {
+          novo_plano: novoPlanoSelecionado,
+        }
+      );
+      setUsuarioModalPlano(null);
+      await carregarUsuariosDoPainelRBAC();
+      const s = await api.obterSessaoAtual();
+      setSessao(s);
+      notificarSucesso(
+        `Plano de ${usuarioModalPlano.nome_completo} alterado para ${novoPlanoSelecionado.toUpperCase()} com sucesso!`
+      );
+    } catch (err) {
+      notificarErro(err);
+    } finally {
+      setSalvandoPlano(false);
+    }
+  }
+
+  async function handleConfirmarExclusaoUsuario() {
+    if (!usuarioModalExclusao) return;
+    try {
+      setExecutandoExclusao(true);
+      const res = await api.excluirUsuarioPeloAdmin(
+        usuarioModalExclusao.membership_id
+      );
+      setUsuarioModalExclusao(null);
+      await carregarUsuariosDoPainelRBAC();
+      notificarSucesso(
+        res.mensagem ||
+          `Conta de ${usuarioModalExclusao.nome_completo} excluída definitivamente com sucesso.`
+      );
+    } catch (err) {
+      notificarErro(err);
+    } finally {
+      setExecutandoExclusao(false);
+    }
+  }
+
+  useEffect(() => {
+    function handleOnline() {
+      setRedeOnline(true);
+      const pendentes = carregarOutboxIA();
+      setPendenciasOutbox(pendentes);
+      if (pendentes.length > 0) {
+        notificarSucesso(
+          `📡 Conexão restabelecida! Há ${pendentes.length} solicitação(ões) de IA salva(s) no dispositivo prontas para sincronização.`
+        );
+      }
+    }
+    function handleOffline() {
+      setRedeOnline(false);
+      notificarErro(
+        "Atenção: Seu dispositivo está sem conexão à internet. O sistema operará em Modo Offline / Persistência Ativa."
+      );
+    }
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  async function handleSolicitarParecerIA(
+    ebtId: string,
+    forcarFallbackCopiloto = false
+  ) {
+    if (!ebtId) return;
+
+    // Detecção precoce de rede offline do cliente
+    if (!redeOnline && modoProvedorIA === "gemini" && !forcarFallbackCopiloto) {
+      const ebtNome = dadosEBT?.premissas?.nome_startup || "EBT em Análise";
+      const novaPendencia: SolicitacaoIAPendenteOutbox = {
+        id: "pend_" + Date.now(),
+        ebt_id: ebtId,
+        ebt_nome: ebtNome,
+        timestamp: new Date().toISOString(),
+        usar_gemini: true,
+        modelo_gemini: modeloGemini,
+        gemini_api_key: chaveGemini || undefined,
+        forcar_regeneracao: forcarRegeneracaoIA,
+        codigo_erro: "ERR_NETWORK_DISCONNECTED",
+        mensagem_erro:
+          "Sem ligação à internet detectada (Código: ERR_NETWORK_DISCONNECTED). Seus dados foram guardados localmente.",
+        status: "PENDING_SYNC",
+      };
+      salvarNoOutboxIA(novaPendencia);
+      setPendenciasOutbox(carregarOutboxIA());
+      setAlertaFalhaIA({
+        codigo_erro: "ERR_NETWORK_DISCONNECTED",
+        mensagem_amigavel:
+          "Sem ligação à internet detectada (Código: ERR_NETWORK_DISCONNECTED). Seus dados foram guardados localmente.",
+        detalhe_tecnico:
+          "Dispositivo sem conectividade à internet detectado pelo navegador (navigator.onLine === false).",
+        suporta_offline: true,
+      });
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+    try {
+      setProcessandoAcao(true);
+      setAlertaFalhaIA(null);
+
+      const usarGeminiFinal = forcarFallbackCopiloto
+        ? false
+        : modoProvedorIA === "gemini";
+
+      const res = await api.solicitarParecerIA(
+        ebtId,
+        {
+          usar_gemini: usarGeminiFinal,
+          gemini_api_key: chaveGemini || undefined,
+          modelo_gemini: usarGeminiFinal ? modeloGemini : undefined,
+          forcar_regeneracao: forcarRegeneracaoIA,
+          permitir_fallback_copiloto: permitirFallbackAutomatico,
+        },
+        controller.signal
+      );
+      clearTimeout(timeoutId);
+
+      await carregarEBTCompleta(ebtId);
+
+      if (res.fallback_acionado) {
+        notificarSucesso(
+          "🛡️ Parecer gerado com sucesso via Modo de Resiliência (Copiloto VC Interno) devido à instabilidade na API externa!"
+        );
+      } else if (res.em_cache) {
+        notificarSucesso(
+          "⚡ Cache Hit Inteligente! Parecer recuperado sem consumir sua quota mensal!"
+        );
+      } else {
+        const mod =
+          res.modelo_resolvido ||
+          res.modelo ||
+          (usarGeminiFinal ? modeloGemini : "Copiloto VC Interno");
+        const tent = res.tentativas_executadas || 1;
+        const gen = res.geracao_resolvida ? ` • ${res.geracao_resolvida}` : "";
+        notificarSucesso(
+          `Parecer gerado com sucesso via ${mod}${gen} (${tent} tentativa${tent > 1 ? "s" : ""})!`
+        );
+      }
+    } catch (err: unknown) {
+      clearTimeout(timeoutId);
+      const erroObj = err as {
+        name?: string;
+        codigo_erro?: string;
+        mensagem_amigavel?: string;
+        message?: string;
+        detalhe?: string;
+        status?: number;
+      };
+
+      const codigo =
+        erroObj.codigo_erro ||
+        (erroObj.name === "AbortError"
+          ? "ERR_GEMINI_TIMEOUT_504"
+          : !redeOnline
+          ? "ERR_NETWORK_DISCONNECTED"
+          : erroObj.status === 422
+          ? "ERR_VALIDACAO_DADOS"
+          : erroObj.status === 400
+          ? "ERR_REQUISICAO_INVALIDA"
+          : "ERR_GEMINI_ALL_MODELS_EXHAUSTED");
+
+      const msg =
+        erroObj.mensagem_amigavel ||
+        erroObj.message ||
+        `Não foi possível conectar ao serviço de inteligência artificial no momento (Código: ${codigo}).`;
+
+      // Persistência automática no Outbox se for requisição ao Gemini
+      if (modoProvedorIA === "gemini" && !forcarFallbackCopiloto) {
+        const ebtNome = dadosEBT?.premissas?.nome_startup || "EBT em Análise";
+        const novaPendencia: SolicitacaoIAPendenteOutbox = {
+          id: "pend_" + Date.now(),
+          ebt_id: ebtId,
+          ebt_nome: ebtNome,
+          timestamp: new Date().toISOString(),
+          usar_gemini: true,
+          modelo_gemini: modeloGemini,
+          gemini_api_key: chaveGemini || undefined,
+          forcar_regeneracao: forcarRegeneracaoIA,
+          codigo_erro: codigo,
+          mensagem_erro: msg,
+          status: "PENDING_SYNC",
+        };
+        salvarNoOutboxIA(novaPendencia);
+        setPendenciasOutbox(carregarOutboxIA());
+      }
+
+      setAlertaFalhaIA({
+        codigo_erro: codigo,
+        mensagem_amigavel: msg,
+        detalhe_tecnico: erroObj.detalhe || erroObj.message,
+        suporta_offline: true,
+        status_http: erroObj.status,
+      });
+    } finally {
+      setProcessandoAcao(false);
+    }
+  }
+
+  async function handleSincronizarPendenciasOutbox() {
+    const pendentes = carregarOutboxIA();
+    if (pendentes.length === 0) {
+      notificarSucesso("Nenhuma pendência na fila de persistência offline.");
+      return;
+    }
+    setSincronizandoOutbox(true);
+    let sucessos = 0;
+    let falhas = 0;
+
+    for (const item of pendentes) {
+      try {
+        await api.solicitarParecerIA(item.ebt_id, {
+          usar_gemini: item.usar_gemini,
+          gemini_api_key: item.gemini_api_key,
+          modelo_gemini: item.modelo_gemini,
+          forcar_regeneracao: item.forcar_regeneracao,
+          permitir_fallback_copiloto: true,
+        });
+        removerDoOutboxIA(item.id);
+        sucessos++;
+      } catch {
+        falhas++;
+      }
+    }
+
+    const restantes = carregarOutboxIA();
+    setPendenciasOutbox(restantes);
+    setSincronizandoOutbox(false);
+
+    if (ebtAtivaId) {
+      await carregarEBTCompleta(ebtAtivaId);
+    }
+
+    if (falhas === 0) {
+      setAlertaFalhaIA(null);
+      notificarSucesso(
+        `✅ Todas as ${sucessos} pendência(s) de IA foram sincronizadas e processadas com sucesso!`
+      );
+    } else {
+      notificarErro(
+        `Sincronização parcial: ${sucessos} processada(s), ${falhas} ainda pendente(s) devido a instabilidade de rede.`
+      );
+    }
+  }
+
+  function handleRemoverPendenciaOutbox(id: string) {
+    removerDoOutboxIA(id);
+    setPendenciasOutbox(carregarOutboxIA());
+    notificarSucesso("Solicitação removida da fila de persistência.");
+  }
+
+  function handleLimparOutboxCompleto() {
+    limparOutboxIA();
+    setPendenciasOutbox([]);
+    setAlertaFalhaIA(null);
+    setSincronizandoOutbox(false);
+    setProcessandoAcao(false);
+    notificarSucesso("Fila de persistência limpa e interface destravada com sucesso.");
+  }
+
   useEffect(() => {
     async function inicializar() {
       const tok = obterTokenSalvo();
@@ -307,6 +867,24 @@ export default function App() {
       }
     }
     inicializar();
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setDrawerPerfilAberto(false);
+        setModalNovaStartupAberto(false);
+        setMostrarModalNovoUsuario(false);
+        setUsuarioModalRBAC(null);
+        setUsuarioModalEdicao(null);
+        setUsuarioModalUso(null);
+        setUsuarioModalExclusao(null);
+        setUsuarioModalPlano(null);
+        setMostrarModalOutbox(false);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
   async function carregarListaEBTs(preferidaId?: string) {
@@ -550,55 +1128,75 @@ export default function App() {
 
   if (carregandoAuth) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC] text-slate-800">
-        <div className="st-card max-w-md w-full text-center">
-          <div className="text-3xl mb-2">🚀</div>
-          <h2 className="text-lg font-bold">
-            Carregando Master Management — Venture Capital Edition...
-          </h2>
+      <div className="min-h-screen flex items-center justify-center bg-[#0A0A0A] text-white relative overflow-hidden font-executive">
+        <div className="absolute -top-16 -right-16 pointer-events-none">
+          <WatermarkLinhasGeometricas className="w-96 h-96 opacity-10" />
+        </div>
+        <div className="bg-[#121212] border border-[#27272A] p-8 rounded-2xl max-w-md w-full text-center shadow-2xl relative z-10 space-y-4">
+          <div className="flex justify-center">
+            <LogoMasterManagement className="w-16 h-16 animate-pulse" />
+          </div>
+          <div>
+            <h2 className="text-lg font-black tracking-wider text-white uppercase font-executive">
+              MASTER <span className="text-[#E30000]">MANAGEMENT</span>
+            </h2>
+            <p className="text-xs text-slate-400 mt-1">
+              Inicializando ambiente seguro de Venture Capital...
+            </p>
+          </div>
+          <div className="w-full bg-[#27272A] rounded-full h-1.5 overflow-hidden">
+            <div className="bg-[#E30000] h-1.5 rounded-full animate-pulse w-3/4"></div>
+          </div>
         </div>
       </div>
     );
   }
 
   // ===========================================================================
-  // 1. NOVA INTERFACE DE AUTENTICAÇÃO PROTEGIDA (LOGIN POR E-MAIL E SENHA)
+  // 1. INTERFACE DE AUTENTICAÇÃO PROTEGIDA (MASTER MANAGEMENT DARK EXECUTIVE)
   // Bloqueia acesso a todas as rotas/telas para usuários não autenticados.
   // ===========================================================================
   if (!sessao) {
     return (
-      <div className="min-h-screen bg-[#F8FAFC] flex flex-col justify-center items-center p-6">
-        <div className="max-w-md w-full">
-          <div className="st-card !p-7 shadow-lg border border-slate-200">
-            <div className="flex items-center gap-3.5 mb-5">
-              <div className="w-12 h-12 rounded-xl bg-[#2563EB] text-white flex items-center justify-center text-2xl font-black shadow-sm">
-                🚀
-              </div>
+      <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col justify-center items-center p-4 sm:p-6 relative overflow-hidden font-executive">
+        {/* Marca d'água geométrica concêntrica nos cantos (WCAG e Master Management branding) */}
+        <div className="absolute -top-24 -left-24 pointer-events-none">
+          <WatermarkLinhasGeometricas className="w-96 h-96 opacity-20" />
+        </div>
+        <div className="absolute -bottom-24 -right-24 pointer-events-none">
+          <WatermarkLinhasGeometricas className="w-96 h-96 opacity-20" />
+        </div>
+
+        <div className="max-w-md w-full relative z-10">
+          <div className="bg-[#121212] border border-[#27272A] rounded-2xl p-6 sm:p-8 shadow-2xl space-y-6">
+            {/* Header com Logotipo e Tipografia Imponente */}
+            <div className="flex items-center gap-4">
+              <LogoMasterManagement className="w-12 h-12 flex-shrink-0" />
               <div>
-                <h1 className="text-xl font-extrabold text-[#0F172A] leading-tight">
-                  Master Management
+                <h1 className="text-xl font-black tracking-wider text-white uppercase leading-none font-executive">
+                  MASTER <span className="text-[#E30000]">MANAGEMENT</span>
                 </h1>
-                <p className="text-xs text-slate-600">
-                  Venture Capital Edition · Acesso Protegido
+                <p className="text-[10px] tracking-widest text-slate-400 font-bold uppercase mt-1">
+                  Strategic Consulting & Venture Capital
                 </p>
               </div>
             </div>
 
-            {/* Alternador Login / Cadastro */}
-            <div className="grid grid-cols-2 gap-1 bg-slate-100 p-1 rounded-lg mb-5">
+            {/* Alternador Login / Cadastro com alto contraste */}
+            <div className="grid grid-cols-2 gap-1 bg-[#18181B] p-1.5 rounded-xl border border-[#27272A]">
               <button
                 type="button"
                 onClick={() => {
                   setModoAuthTela("login");
                   setErroValidacaoLogin(null);
                 }}
-                className={`py-2 text-xs font-bold rounded-md transition ${
+                className={`py-2 text-xs font-bold rounded-lg transition flex items-center justify-center gap-1.5 ${
                   modoAuthTela === "login"
-                    ? "bg-white text-[#2563EB] shadow-sm"
-                    : "text-slate-600 hover:text-slate-900"
+                    ? "bg-[#E30000] text-white shadow-md shadow-red-950/40"
+                    : "text-slate-400 hover:text-white"
                 }`}
               >
-                🔐 Entrar na Conta
+                <span>🔐</span> Entrar no Sistema
               </button>
               <button
                 type="button"
@@ -606,22 +1204,23 @@ export default function App() {
                   setModoAuthTela("cadastro");
                   setErroValidacaoLogin(null);
                 }}
-                className={`py-2 text-xs font-bold rounded-md transition ${
+                className={`py-2 text-xs font-bold rounded-lg transition flex items-center justify-center gap-1.5 ${
                   modoAuthTela === "cadastro"
-                    ? "bg-white text-[#2563EB] shadow-sm"
-                    : "text-slate-600 hover:text-slate-900"
+                    ? "bg-[#E30000] text-white shadow-md shadow-red-950/40"
+                    : "text-slate-400 hover:text-white"
                 }`}
               >
-                ✨ Criar Nova Conta
+                <span>✨</span> Criar Nova Conta
               </button>
             </div>
 
             {(erroValidacaoLogin || erroGlobal) && (
               <div
                 role="alert"
-                className="bg-red-50 border-l-4 border-red-600 text-red-900 rounded-lg p-3 text-xs font-medium mb-4"
+                className="bg-red-950/70 border border-[#E30000] text-red-200 rounded-xl p-3.5 text-xs font-medium flex items-start gap-2"
               >
-                ⚠️ {erroValidacaoLogin || erroGlobal}
+                <span className="text-base text-[#E30000]">⚠️</span>
+                <span>{erroValidacaoLogin || erroGlobal}</span>
               </div>
             )}
 
@@ -634,9 +1233,9 @@ export default function App() {
                 <div>
                   <label
                     htmlFor="login-email"
-                    className="block text-xs font-bold text-slate-700 mb-1.5"
+                    className="block text-xs font-bold text-slate-300 mb-1.5"
                   >
-                    E-mail
+                    E-mail Corporativo
                   </label>
                   <input
                     id="login-email"
@@ -644,7 +1243,7 @@ export default function App() {
                     required
                     autoComplete="email"
                     placeholder="seu.email@empresa.com.br"
-                    className="st-input"
+                    className="w-full bg-[#1A1A1A] border border-[#3F3F46] rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-[#E30000] focus:ring-1 focus:ring-[#E30000] transition"
                     value={emailLogin}
                     onChange={(e) => {
                       setEmailLogin(e.target.value);
@@ -656,9 +1255,9 @@ export default function App() {
                 <div>
                   <label
                     htmlFor="login-senha"
-                    className="block text-xs font-bold text-slate-700 mb-1.5"
+                    className="block text-xs font-bold text-slate-300 mb-1.5"
                   >
-                    Senha
+                    Senha de Acesso
                   </label>
                   <div className="relative">
                     <input
@@ -667,7 +1266,7 @@ export default function App() {
                       required
                       autoComplete="current-password"
                       placeholder="Digite sua senha"
-                      className="st-input pr-20"
+                      className="w-full bg-[#1A1A1A] border border-[#3F3F46] rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-[#E30000] focus:ring-1 focus:ring-[#E30000] transition pr-24"
                       value={senhaLogin}
                       onChange={(e) => {
                         setSenhaLogin(e.target.value);
@@ -677,7 +1276,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => setMostrarSenhaLogin((v) => !v)}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-[#2563EB] hover:text-blue-800 px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 transition"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-300 hover:text-white px-2 py-1 rounded bg-[#27272A] hover:bg-[#3F3F46] transition"
                       title={
                         mostrarSenhaLogin ? "Ocultar senha" : "Visualizar senha"
                       }
@@ -690,7 +1289,7 @@ export default function App() {
                 <button
                   type="submit"
                   disabled={submetendoLogin}
-                  className="st-btn w-full flex items-center justify-center gap-2 disabled:opacity-60"
+                  className="st-btn w-full !py-3 !text-sm flex items-center justify-center gap-2"
                 >
                   {submetendoLogin ? (
                     <>
@@ -709,14 +1308,14 @@ export default function App() {
                 noValidate
               >
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                  <label className="block text-xs font-bold text-slate-300 mb-1">
                     Nome Completo *
                   </label>
                   <input
                     type="text"
                     required
                     placeholder="Seu nome completo"
-                    className="st-input"
+                    className="w-full bg-[#1A1A1A] border border-[#3F3F46] rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#E30000] focus:ring-1 focus:ring-[#E30000]"
                     value={formCadastro.nome_completo}
                     onChange={(e) =>
                       setFormCadastro({
@@ -727,14 +1326,14 @@ export default function App() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    E-mail *
+                  <label className="block text-xs font-bold text-slate-300 mb-1">
+                    E-mail Corporativo *
                   </label>
                   <input
                     type="email"
                     required
                     placeholder="seu.email@empresa.com.br"
-                    className="st-input"
+                    className="w-full bg-[#1A1A1A] border border-[#3F3F46] rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#E30000] focus:ring-1 focus:ring-[#E30000]"
                     value={formCadastro.email}
                     onChange={(e) =>
                       setFormCadastro({
@@ -746,13 +1345,13 @@ export default function App() {
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label className="block text-xs font-bold text-slate-300 mb-1">
                       Telefone / WhatsApp
                     </label>
                     <input
                       type="text"
                       placeholder="(11) 99999-9999"
-                      className="st-input"
+                      className="w-full bg-[#1A1A1A] border border-[#3F3F46] rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#E30000] focus:ring-1 focus:ring-[#E30000]"
                       value={formCadastro.telefone_whatsapp}
                       onChange={(e) =>
                         setFormCadastro({
@@ -763,13 +1362,13 @@ export default function App() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label className="block text-xs font-bold text-slate-300 mb-1">
                       Cargo / Organização
                     </label>
                     <input
                       type="text"
                       placeholder="Ex: CEO / Startup TIC"
-                      className="st-input"
+                      className="w-full bg-[#1A1A1A] border border-[#3F3F46] rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#E30000] focus:ring-1 focus:ring-[#E30000]"
                       value={formCadastro.cargo_organizacao}
                       onChange={(e) =>
                         setFormCadastro({
@@ -781,7 +1380,7 @@ export default function App() {
                   </div>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                  <label className="block text-xs font-bold text-slate-300 mb-1">
                     Senha (mínimo 6 caracteres) *
                   </label>
                   <div className="relative">
@@ -789,7 +1388,7 @@ export default function App() {
                       type={mostrarSenhaLogin ? "text" : "password"}
                       required
                       placeholder="Crie uma senha segura"
-                      className="st-input pr-20"
+                      className="w-full bg-[#1A1A1A] border border-[#3F3F46] rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#E30000] focus:ring-1 focus:ring-[#E30000] pr-20"
                       value={formCadastro.senha}
                       onChange={(e) =>
                         setFormCadastro({
@@ -801,16 +1400,16 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => setMostrarSenhaLogin((v) => !v)}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-[#2563EB] hover:text-blue-800 px-2 py-1 rounded bg-slate-100"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-300 hover:text-white px-2 py-1 rounded bg-[#27272A]"
                     >
-                      {mostrarSenhaLogin ? "🙈 Ocultar" : "👁️ Mostrar"}
+                      {mostrarSenhaLogin ? "🙈" : "👁️"}
                     </button>
                   </div>
                 </div>
                 <button
                   type="submit"
                   disabled={submetendoLogin}
-                  className="st-btn w-full flex items-center justify-center gap-2 disabled:opacity-60"
+                  className="st-btn w-full !py-2.5 !text-sm flex items-center justify-center gap-2"
                 >
                   {submetendoLogin
                     ? "⏳ Cadastrando conta..."
@@ -819,9 +1418,13 @@ export default function App() {
               </form>
             )}
 
-            <div className="mt-5 pt-4 border-t border-slate-200 flex items-center justify-between text-[11px] text-slate-500">
-              <span>🔒 Sessão Criptografada JWT + PBKDF2-SHA256</span>
-              <span>RBAC Multi-Tenant</span>
+            <div className="pt-4 border-t border-[#27272A] flex items-center justify-between text-[11px] text-slate-400">
+              <span className="flex items-center gap-1">
+                <span>🔒</span> Sessão Criptografada JWT + PBKDF2
+              </span>
+              <span className="font-semibold text-slate-300">
+                Multi-Tenant RBAC
+              </span>
             </div>
           </div>
         </div>
@@ -865,376 +1468,788 @@ export default function App() {
   const pontuacaoSeguranca = testesImunidade.filter((t) => t.ok).length;
 
   return (
-    <div className="min-h-screen flex bg-[#F8FAFC] text-[#0F172A]">
+    <div className="min-h-screen bg-[#F8FAFC] text-[#0F172A] flex flex-col font-executive">
       {/* =====================================================================
-          SIDEBAR ESQUERDA — IDÊNTICA AO STREAMLIT LEGADO (app.py)
+          1. TOP NAVBAR EXECUTIVO (IDENTIDADE VISUAL MASTER MANAGEMENT)
       ===================================================================== */}
-      <aside className="w-80 bg-white border-r border-slate-200 flex-shrink-0 flex flex-col p-4 space-y-4 overflow-y-auto max-h-screen sticky top-0">
-        <img
-          src="https://images.unsplash.com/photo-1555066931-4365d14bab8c?q=80&w=1000&auto=format&fit=crop"
-          alt="Sidebar Banner"
-          className="w-full h-28 object-cover rounded-lg"
-        />
-        <h2 className="text-lg font-extrabold text-[#0F172A]">
-          🏢 Núcleo Multi-Tenant SaaS
-        </h2>
+      <header className="bg-[#0A0A0A] text-white border-b border-[#27272A] sticky top-0 z-30 shadow-lg">
+        {/* Faixa Superior: Marca Oficial + Seletor Rápido de EBT + Perfil Drawer Trigger */}
+        <div className="w-full px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+          {/* Lado Esquerdo: Identidade Visual e Logotipo Oficial Master Management */}
+          <div className="flex items-center gap-3.5 flex-shrink-0">
+            <div className="relative flex items-center justify-center">
+              <LogoMasterManagement className="w-10 h-10" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-base sm:text-lg font-black tracking-wider text-white uppercase leading-tight font-executive">
+                MASTER <span className="text-[#E30000]">MANAGEMENT</span>
+              </span>
+              <span className="text-[9px] sm:text-[10px] tracking-[0.22em] text-slate-400 font-bold uppercase leading-none">
+                Venture Capital & Advisory
+              </span>
+            </div>
+          </div>
 
-        {/* Card do Usuário Autenticado */}
-        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-2">
-          <div className="flex items-center gap-2.5">
-            {sessao.user.avatar_url ? (
-              <img
-                src={sessao.user.avatar_url}
-                alt={sessao.user.nome_completo}
-                className="w-10 h-10 rounded-full object-cover border-2 border-[#2563EB] flex-shrink-0"
-              />
-            ) : (
-              <div className="w-10 h-10 rounded-full bg-[#2563EB] text-white font-black flex items-center justify-center text-xs flex-shrink-0">
-                {obterIniciais(sessao.user.nome_completo)}
-              </div>
-            )}
-            <div className="min-w-0 flex-1">
-              <div className="font-bold text-slate-900 truncate">
-                {sessao.user.nome_completo}
-              </div>
-              <div className="text-slate-600 truncate text-[11px]">
-                {sessao.user.email}
-              </div>
-              {sessao.user.cargo_organizacao && (
-                <div className="text-[10px] text-slate-500 truncate">
-                  {sessao.user.cargo_organizacao}
+          {/* Centro: Seletor Rápido de Startup (Workspace EBT) */}
+          <div className="hidden md:flex items-center gap-2.5 flex-1 max-w-xl mx-4">
+            <div className="flex items-center gap-2 bg-[#171717] border border-[#2E2E32] rounded-xl px-3 py-1.5 w-full shadow-inner">
+              <span className="text-xs font-bold text-slate-400 flex items-center gap-1 flex-shrink-0">
+                <span className="text-sm">🚀</span> Startup:
+              </span>
+              <select
+                aria-label="Selecionar Startup Ativa"
+                className="bg-transparent text-xs font-extrabold text-white focus:outline-none flex-1 truncate cursor-pointer"
+                value={ebtAtivaId}
+                onChange={(e) => {
+                  setEbtAtivaId(e.target.value);
+                  carregarEBTCompleta(e.target.value);
+                }}
+              >
+                {ebts.map((e) => (
+                  <option
+                    key={e.id}
+                    value={e.id}
+                    className="bg-[#171717] text-white font-medium"
+                  >
+                    {e.nome_startup}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => setModalNovaStartupAberto(true)}
+                title="Criar novo Workspace EBT"
+                className="text-[11px] font-bold px-2 py-0.5 rounded bg-[#E30000] hover:bg-[#C00000] text-white transition flex items-center gap-1 flex-shrink-0"
+              >
+                <span>➕</span> Nova
+              </button>
+            </div>
+          </div>
+
+          {/* Lado Direito: Badges de Plano/Papel + Avatar Pill (Dispara o Slide-Over Drawer) */}
+          <div className="flex items-center gap-3 flex-shrink-0">
+            <div className="hidden xl:flex items-center gap-2">
+              <span className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-[#18181B] text-slate-300 border border-[#27272A] flex items-center gap-1.5">
+                <span className="text-xs">🏢</span>
+                <span className="truncate max-w-[140px]">
+                  {sessao.tenant.nome}
+                </span>
+              </span>
+              <span className="px-2 py-1 text-[10px] font-black tracking-wider rounded-lg bg-emerald-950/80 text-emerald-400 border border-emerald-800 uppercase">
+                {sessao.tenant.plano_codigo}
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setDrawerPerfilAberto(true)}
+              aria-haspopup="dialog"
+              aria-expanded={drawerPerfilAberto}
+              aria-label="Abrir centro de controle e perfil do usuário"
+              className="flex items-center gap-2.5 p-1 sm:px-3 sm:py-1.5 rounded-xl bg-[#171717] hover:bg-[#222226] border border-[#2E2E32] hover:border-slate-600 transition focus:outline-none focus:ring-2 focus:ring-[#E30000]"
+            >
+              {sessao.user.avatar_url ? (
+                <img
+                  src={sessao.user.avatar_url}
+                  alt={sessao.user.nome_completo}
+                  className="w-8 h-8 rounded-full object-cover border-2 border-[#E30000] flex-shrink-0"
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-[#E30000] text-white font-black flex items-center justify-center text-xs flex-shrink-0 shadow-sm">
+                  {obterIniciais(sessao.user.nome_completo)}
                 </div>
+              )}
+              <div className="hidden sm:flex flex-col text-left">
+                <span className="text-xs font-bold text-white truncate max-w-[130px]">
+                  {sessao.user.nome_completo}
+                </span>
+                <span className="text-[10px] text-slate-400 font-semibold uppercase flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#E30000] inline-block"></span>
+                  {sessao.membership_ativa.papel}
+                </span>
+              </div>
+              <span className="text-slate-400 text-xs hidden sm:inline ml-0.5">
+                ▼
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* Faixa Inferior: Menu Horizontal Superior de Abas (Com rolagem suave e destaque em Vermelho Master) */}
+        <div className="bg-[#121212] border-t border-[#27272A] px-4 sm:px-6">
+          <nav
+            role="tablist"
+            aria-label="Navegação das Abas do Plano de Negócios"
+            className="flex items-center gap-1.5 overflow-x-auto tabs-scrollbar py-2 text-xs"
+          >
+            {ABAS_STREAMLIT.filter((t) => !t.adminOnly || ehAdmin).map((t) => {
+              const ativa = abaAtiva === t.id;
+              return (
+                <button
+                  key={t.id}
+                  role="tab"
+                  aria-selected={ativa}
+                  onClick={() => setAbaAtiva(t.id)}
+                  className={`flex-shrink-0 px-3.5 py-2 rounded-lg font-bold transition flex items-center gap-1.5 focus:outline-none focus:ring-2 focus:ring-[#E30000] ${
+                    ativa
+                      ? "bg-[#E30000] text-white shadow-md shadow-red-950/50 border-b-2 border-white"
+                      : "text-slate-300 hover:text-white hover:bg-[#27272A]"
+                  }`}
+                >
+                  <span>{t.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+      </header>
+
+      {/* Banner de Modo Offline & Persistência Ativa */}
+      {(!redeOnline || pendenciasOutbox.length > 0) && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`border-b px-4 sm:px-6 py-2.5 text-xs flex flex-wrap items-center justify-between gap-3 ${
+            !redeOnline
+              ? "bg-amber-950/80 border-amber-600/50 text-amber-200"
+              : "bg-[#18181B] border-[#3F3F46] text-slate-200"
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-2.5 w-2.5 relative">
+              <span
+                className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                  !redeOnline ? "bg-amber-400" : "bg-[#E30000]"
+                }`}
+              />
+              <span
+                className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                  !redeOnline ? "bg-amber-500" : "bg-[#E30000]"
+                }`}
+              />
+            </span>
+            <div className="font-medium">
+              <span className="font-extrabold text-white">
+                {!redeOnline
+                  ? "Operando em Modo Offline"
+                  : "Persistência Ativa Local"}
+                :
+              </span>{" "}
+              {pendenciasOutbox.length > 0 ? (
+                <span>
+                  Há <strong>{pendenciasOutbox.length}</strong> solicitação(ões)
+                  de IA salva(s) no dispositivo prontas para envio.
+                </span>
+              ) : (
+                <span>
+                  Conexão de rede ausente. Suas solicitações de IA serão salvas
+                  localmente e sincronizadas quando restabelecida.
+                </span>
               )}
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5 pt-1">
-            <span className="px-2 py-0.5 text-[10px] font-bold rounded bg-blue-600 text-white uppercase">
-              Role: {sessao.membership_ativa.papel}
-            </span>
-            <span className="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-100 text-emerald-900 uppercase">
-              Plano: {sessao.tenant.plano_codigo}
-            </span>
+          <div className="flex items-center gap-2">
+            {pendenciasOutbox.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  disabled={sincronizandoOutbox}
+                  onClick={handleSincronizarPendenciasOutbox}
+                  className="px-3 py-1.5 rounded-lg bg-[#E30000] hover:bg-[#C00000] text-white font-bold text-xs inline-flex items-center gap-1.5 transition shadow-sm focus:outline-none focus:ring-2 focus:ring-[#E30000]"
+                  title="Reenviar todas as solicitações salvas localmente para a API"
+                  aria-label="Sincronizar e reenviar solicitações de IA pendentes"
+                >
+                  <span>{sincronizandoOutbox ? "⏳" : "🔄"}</span>
+                  <span>
+                    {sincronizandoOutbox
+                      ? "Sincronizando..."
+                      : "Sincronizar / Reenviar Pendências"}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setMostrarModalOutbox(true)}
+                  className="px-2.5 py-1.5 rounded-lg border border-[#3F3F46] bg-[#27272A] hover:bg-[#3F3F46] text-white text-xs font-semibold transition focus:outline-none focus:ring-2 focus:ring-slate-400"
+                  title="Inspecionar fila de pendências locais"
+                >
+                  Inspecionar Fila ({pendenciasOutbox.length})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleLimparOutboxCompleto}
+                  className="px-2.5 py-1.5 rounded-lg border border-red-800 bg-red-950/90 hover:bg-red-900 text-red-200 hover:text-white text-xs font-bold transition focus:outline-none focus:ring-2 focus:ring-red-400 inline-flex items-center gap-1"
+                  title="Limpar e destravar a fila de persistência offline"
+                >
+                  <span>🗑️</span>
+                  <span>Limpar Fila</span>
+                </button>
+              </>
+            )}
           </div>
-
-          <div className="grid grid-cols-2 gap-1.5 pt-1">
-            <button
-              type="button"
-              onClick={() => setAbaAtiva("meu_perfil")}
-              className={`py-1.5 px-2 font-bold rounded text-xs transition ${
-                abaAtiva === "meu_perfil"
-                  ? "bg-[#2563EB] text-white"
-                  : "bg-white border border-slate-300 hover:bg-slate-100 text-slate-800"
-              }`}
-            >
-              👤 Meu Perfil
-            </button>
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="py-1.5 px-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold rounded text-xs transition"
-            >
-              🚪 Sair
-            </button>
-          </div>
-
-          {ehAdmin && (
-            <button
-              type="button"
-              onClick={() => setAbaAtiva("painel_rbac")}
-              className={`w-full py-1.5 px-2 font-bold rounded text-xs transition ${
-                abaAtiva === "painel_rbac"
-                  ? "bg-[#2563EB] text-white"
-                  : "bg-blue-50 border border-blue-200 text-blue-900 hover:bg-blue-100"
-              }`}
-            >
-              🛡️ Abrir Painel Admin (RBAC)
-            </button>
-          )}
         </div>
-
-        {/* 1. Seleção de Perfil de Acesso (RBAC) */}
-        <div>
-          <label className="block text-xs font-bold text-slate-700 mb-1">
-            🔐 Papel RBAC Ativo:
-          </label>
-          <select
-            className="st-input text-xs font-semibold"
-            value={sessao.membership_ativa.id}
-            onChange={(e) => handleTrocarMembershipOAuth(e.target.value)}
-          >
-            {sessao.perfis_rbac_tenant.map((p) => (
-              <option key={p.membership_id} value={p.membership_id}>
-                [{p.papel.toUpperCase()} · {p.plano_codigo.toUpperCase()}]{" "}
-                {p.nome} ({p.email})
-              </option>
-            ))}
-          </select>
-          <p className="text-[11px] text-slate-600 mt-1.5">
-            📦 Plano{" "}
-            <strong>{sessao.tenant.plano_codigo.toUpperCase()}</strong> · EBTs:{" "}
-            <strong>
-              {ebts.length}/{sessao.tenant.limite_ebts}
-            </strong>{" "}
-            · Papel: <code>{sessao.membership_ativa.papel}</code>
-          </p>
-        </div>
-
-        {/* Nova Consultoria (Apenas Admin) */}
-        {ehAdmin && (
-          <details className="st-card !p-3 text-xs">
-            <summary className="font-bold cursor-pointer">
-              ➕ Nova Consultoria (Onboarding Tenant)
-            </summary>
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                try {
-                  await api.criarTenant({
-                    nome_consultoria: novaConsultoria.nome_consultoria,
-                    slug: novaConsultoria.slug,
-                    email_dono: novaConsultoria.email_dono,
-                    nome_dono: `Dono ${novaConsultoria.nome_consultoria}`,
-                    plano: novaConsultoria.plano,
-                  });
-                  notificarSucesso("Consultoria criada com sucesso!");
-                  setNovaConsultoria({
-                    nome_consultoria: "",
-                    slug: "",
-                    email_dono: "diretor@consultoria.com",
-                    plano: "free",
-                  });
-                } catch (err) {
-                  notificarErro(err);
-                }
-              }}
-              className="space-y-2 mt-3"
-            >
-              <input
-                className="st-input text-xs"
-                placeholder="Nome da Consultoria"
-                value={novaConsultoria.nome_consultoria}
-                onChange={(e) =>
-                  setNovaConsultoria({
-                    ...novaConsultoria,
-                    nome_consultoria: e.target.value,
-                  })
-                }
-                required
-              />
-              <input
-                className="st-input text-xs"
-                placeholder="Identificador (slug, ex: nordeste-vc)"
-                value={novaConsultoria.slug}
-                onChange={(e) =>
-                  setNovaConsultoria({
-                    ...novaConsultoria,
-                    slug: e.target.value,
-                  })
-                }
-                required
-              />
-              <select
-                className="st-input text-xs"
-                value={novaConsultoria.plano}
-                onChange={(e) =>
-                  setNovaConsultoria({
-                    ...novaConsultoria,
-                    plano: e.target.value as PlanoCodigo,
-                  })
-                }
-              >
-                <option value="free">FREE (Gratuito)</option>
-                <option value="starter">STARTER</option>
-                <option value="pro">PRO</option>
-                <option value="enterprise">ENTERPRISE</option>
-              </select>
-              <button type="submit" className="st-btn w-full text-xs !py-2">
-                Criar Consultoria
-              </button>
-            </form>
-          </details>
-        )}
-
-        <hr className="border-slate-200" />
-
-        {/* 3. Workspaces EBT */}
-        <div>
-          <h3 className="text-sm font-bold text-[#0F172A] mb-2">
-            📂 Workspaces EBT
-          </h3>
-          <label className="block text-xs font-semibold text-slate-700 mb-1">
-            Startup (Workspace EBT):
-          </label>
-          <select
-            className="st-input text-xs font-semibold"
-            value={ebtAtivaId}
-            onChange={(e) => {
-              setEbtAtivaId(e.target.value);
-              carregarEBTCompleta(e.target.value);
-            }}
-          >
-            {ebts.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.nome_startup}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* 4. Criar Novo Workspace EBT */}
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (!novoNomeStartup.trim()) return;
-            try {
-              const criada = await api.criarEBT({
-                nome_startup: novoNomeStartup.trim(),
-              });
-              setNovoNomeStartup("");
-              await carregarListaEBTs(criada.id);
-              notificarSucesso("Workspace EBT criado e auditado com sucesso!");
-            } catch (err) {
-              notificarErro(err);
-            }
-          }}
-          className="st-card !p-3 space-y-2"
-        >
-          <label className="block text-xs font-bold text-slate-700">
-            Nome da Nova Operação (EBT)
-          </label>
-          <input
-            className="st-input text-xs"
-            value={novoNomeStartup}
-            onChange={(e) => setNovoNomeStartup(e.target.value)}
-            placeholder="Ex: DeepTech SaaS"
-          />
-          <button type="submit" className="st-btn w-full text-xs !py-2">
-            ➕ Criar Startup
-          </button>
-        </form>
-
-        {/* 5. Renomear / Excluir */}
-        <details className="st-card !p-3 text-xs">
-          <summary className="font-bold cursor-pointer">
-            ✏️ Renomear / 🗑️ Excluir
-          </summary>
-          <div className="space-y-3 mt-3">
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                if (!ebtAtivaId || !nomeRenomearStartup.trim()) return;
-                try {
-                  await api.renomearEBT(ebtAtivaId, nomeRenomearStartup.trim());
-                  await carregarListaEBTs(ebtAtivaId);
-                  notificarSucesso("Nome da startup atualizado!");
-                } catch (err) {
-                  notificarErro(err);
-                }
-              }}
-              className="space-y-2"
-            >
-              <label className="block text-xs font-semibold">Novo Nome</label>
-              <input
-                className="st-input text-xs"
-                value={nomeRenomearStartup}
-                onChange={(e) => setNomeRenomearStartup(e.target.value)}
-              />
-              <button type="submit" className="st-btn w-full text-xs !py-1.5">
-                Salvar Alteração
-              </button>
-            </form>
-            <div className="bg-amber-50 border border-amber-200 text-amber-900 p-2 rounded text-[11px]">
-              Aviso: A exclusão é permanente e destrói o valuation do banco de
-              dados.
-            </div>
-            <button
-              type="button"
-              onClick={async () => {
-                if (!ebtAtivaId) return;
-                try {
-                  await api.excluirEBT(ebtAtivaId);
-                  await carregarListaEBTs();
-                  notificarSucesso("Workspace EBT excluído.");
-                } catch (err) {
-                  notificarErro(err);
-                }
-              }}
-              className="w-full py-1.5 px-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded text-xs"
-            >
-              Excluir Startup
-            </button>
-          </div>
-        </details>
-      </aside>
+      )}
 
       {/* =====================================================================
-          ÁREA PRINCIPAL — CABEÇALHO + 12 ABAS DO STREAMLIT (app.py)
+          2. SLIDE-OVER DRAWER (PAINEL DE PERFIL & CONTROLE SAAS)
       ===================================================================== */}
-      <main className="flex-1 p-6 overflow-x-hidden space-y-5">
-        {/* Cabeçalho do Aplicativo */}
-        <header className="flex items-center gap-4 pb-4 border-b border-slate-200">
-          <div className="text-3xl font-black text-[#2563EB] bg-white border border-slate-200 rounded-xl px-4 py-2 shadow-sm">
-            🚀 VC
-          </div>
-          <div>
-            <h1 className="text-2xl font-black text-[#0F172A]">
-              Startup: {dadosEBT?.ebt.nome_startup || "..."}
-            </h1>
-            <p className="text-xs text-slate-600 mt-0.5">
-              Master Management SaaS — Consultoria:{" "}
-              <strong>{sessao.tenant.nome}</strong> · Plano:{" "}
-              <strong className="uppercase">
-                {sessao.tenant.plano_codigo}
-              </strong>{" "}
-              · Papel RBAC:{" "}
-              <code className="bg-slate-200 px-1.5 py-0.5 rounded font-bold uppercase">
-                {sessao.membership_ativa.papel}
-              </code>{" "}
-              {podeEditarDiagnostico
-                ? "✏️ (Edição Habilitada)"
-                : "🔒 (Modo Somente Leitura)"}
-            </p>
-          </div>
-        </header>
+      {drawerPerfilAberto && (
+        <div
+          className="fixed inset-0 z-50 overflow-hidden font-executive"
+          role="dialog"
+          aria-modal="true"
+        >
+          {/* Backdrop Escuro */}
+          <div
+            className="fixed inset-0 bg-black/75 backdrop-blur-sm transition-opacity"
+            onClick={() => setDrawerPerfilAberto(false)}
+            aria-hidden="true"
+          />
 
-        {/* Notificações Globais */}
+          <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
+            <div className="w-screen max-w-md bg-[#121212] border-l border-[#27272A] text-white shadow-2xl flex flex-col justify-between overflow-y-auto">
+              {/* Topo do Drawer */}
+              <div className="p-6 space-y-6">
+                <div className="flex items-center justify-between pb-4 border-b border-[#27272A]">
+                  <div className="flex items-center gap-3">
+                    <LogoMasterManagement className="w-8 h-8" />
+                    <div>
+                      <h2 className="text-sm font-black tracking-wider uppercase text-white font-executive">
+                        Painel de Controle
+                      </h2>
+                      <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-widest">
+                        Master Management SaaS
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDrawerPerfilAberto(false)}
+                    aria-label="Fechar painel"
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#27272A] transition"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Card do Usuário Autenticado */}
+                <div className="bg-[#18181B] border border-[#2E2E32] rounded-xl p-4 space-y-3.5">
+                  <div className="flex items-center gap-3">
+                    {sessao.user.avatar_url ? (
+                      <img
+                        src={sessao.user.avatar_url}
+                        alt={sessao.user.nome_completo}
+                        className="w-12 h-12 rounded-full object-cover border-2 border-[#E30000] flex-shrink-0"
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-full bg-[#E30000] text-white font-black flex items-center justify-center text-sm flex-shrink-0 shadow-md">
+                        {obterIniciais(sessao.user.nome_completo)}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="font-extrabold text-white text-sm truncate">
+                        {sessao.user.nome_completo}
+                      </div>
+                      <div className="text-slate-400 truncate text-xs">
+                        {sessao.user.email}
+                      </div>
+                      {sessao.user.cargo_organizacao && (
+                        <div className="text-[11px] text-slate-400 truncate mt-0.5">
+                          {sessao.user.cargo_organizacao}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    <span className="px-2 py-0.5 text-[10px] font-black rounded bg-[#E30000] text-white uppercase tracking-wider">
+                      Role: {sessao.membership_ativa.papel}
+                    </span>
+                    <span className="px-2 py-0.5 text-[10px] font-black rounded bg-emerald-950 text-emerald-400 border border-emerald-800 uppercase tracking-wider">
+                      Plano: {sessao.tenant.plano_codigo}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAbaAtiva("meu_perfil");
+                        setDrawerPerfilAberto(false);
+                      }}
+                      className="py-2 px-3 font-bold rounded-lg text-xs transition bg-[#27272A] hover:bg-[#3F3F46] text-white flex items-center justify-center gap-1.5"
+                    >
+                      <span>👤</span> Meu Perfil
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDrawerPerfilAberto(false);
+                        handleLogout();
+                      }}
+                      className="py-2 px-3 font-bold rounded-lg text-xs transition bg-red-950/60 hover:bg-red-900 border border-red-800 text-red-200 flex items-center justify-center gap-1.5"
+                    >
+                      <span>🚪</span> Sair
+                    </button>
+                  </div>
+
+                  {ehAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAbaAtiva("painel_rbac");
+                        setDrawerPerfilAberto(false);
+                      }}
+                      className="w-full py-2 px-3 font-bold rounded-lg text-xs transition bg-[#E30000] hover:bg-[#C00000] text-white flex items-center justify-center gap-2 shadow-sm"
+                    >
+                      <span>🛡️</span> Abrir Painel Admin (RBAC)
+                    </button>
+                  )}
+                </div>
+
+                {/* Seleção de Papel RBAC */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-slate-300">
+                    🔐 Papel RBAC Ativo (Sessão):
+                  </label>
+                  <select
+                    className="w-full bg-[#1A1A1A] border border-[#3F3F46] rounded-lg px-3 py-2 text-xs font-semibold text-white focus:outline-none focus:border-[#E30000]"
+                    value={sessao.membership_ativa.id}
+                    onChange={(e) => handleTrocarMembershipOAuth(e.target.value)}
+                  >
+                    {sessao.perfis_rbac_tenant.map((p) => (
+                      <option
+                        key={p.membership_id}
+                        value={p.membership_id}
+                        className="bg-[#1A1A1A]"
+                      >
+                        [{p.papel.toUpperCase()} · {p.plano_codigo.toUpperCase()}]{" "}
+                        {p.nome} ({p.email})
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-slate-400">
+                    Consultoria: <strong>{sessao.tenant.nome}</strong> · EBTs:{" "}
+                    <strong>
+                      {ebts.length}/{sessao.tenant.limite_ebts}
+                    </strong>
+                  </p>
+                </div>
+
+                <hr className="border-[#27272A]" />
+
+                {/* Gestão de Workspaces EBT */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-black tracking-wider uppercase text-slate-300 flex items-center gap-1.5">
+                      <span>📂</span> Workspaces EBT (Startups)
+                    </h3>
+                    <span className="text-[10px] text-slate-400 font-bold">
+                      {ebts.length} cadastradas
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                      Startup Ativa:
+                    </label>
+                    <select
+                      className="w-full bg-[#1A1A1A] border border-[#3F3F46] rounded-lg px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-[#E30000]"
+                      value={ebtAtivaId}
+                      onChange={(e) => {
+                        setEbtAtivaId(e.target.value);
+                        carregarEBTCompleta(e.target.value);
+                      }}
+                    >
+                      {ebts.map((e) => (
+                        <option
+                          key={e.id}
+                          value={e.id}
+                          className="bg-[#1A1A1A]"
+                        >
+                          {e.nome_startup}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Criar Novo Workspace EBT */}
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      if (!novoNomeStartup.trim()) return;
+                      try {
+                        const criada = await api.criarEBT({
+                          nome_startup: novoNomeStartup.trim(),
+                        });
+                        setNovoNomeStartup("");
+                        await carregarListaEBTs(criada.id);
+                        notificarSucesso(
+                          "Workspace EBT criado e auditado com sucesso!"
+                        );
+                      } catch (err) {
+                        notificarErro(err);
+                      }
+                    }}
+                    className="bg-[#18181B] border border-[#2E2E32] rounded-xl p-3 space-y-2"
+                  >
+                    <label className="block text-xs font-bold text-slate-300">
+                      Nova Operação (EBT)
+                    </label>
+                    <input
+                      className="w-full bg-[#121212] border border-[#3F3F46] rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#E30000]"
+                      value={novoNomeStartup}
+                      onChange={(e) => setNovoNomeStartup(e.target.value)}
+                      placeholder="Ex: DeepTech SaaS"
+                    />
+                    <button
+                      type="submit"
+                      className="st-btn w-full !py-1.5 !text-xs"
+                    >
+                      ➕ Criar Startup
+                    </button>
+                  </form>
+
+                  {/* Renomear / Excluir */}
+                  <details className="bg-[#18181B] border border-[#2E2E32] rounded-xl p-3 text-xs">
+                    <summary className="font-bold cursor-pointer text-slate-300 hover:text-white">
+                      ✏️ Renomear / 🗑️ Excluir Startup
+                    </summary>
+                    <div className="space-y-3 mt-3">
+                      <form
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          if (!ebtAtivaId || !nomeRenomearStartup.trim()) return;
+                          try {
+                            await api.renomearEBT(
+                              ebtAtivaId,
+                              nomeRenomearStartup.trim()
+                            );
+                            await carregarListaEBTs(ebtAtivaId);
+                            notificarSucesso("Nome da startup atualizado!");
+                          } catch (err) {
+                            notificarErro(err);
+                          }
+                        }}
+                        className="space-y-2"
+                      >
+                        <label className="block text-xs font-semibold text-slate-300">
+                          Novo Nome
+                        </label>
+                        <input
+                          className="w-full bg-[#121212] border border-[#3F3F46] rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#E30000]"
+                          value={nomeRenomearStartup}
+                          onChange={(e) =>
+                            setNomeRenomearStartup(e.target.value)
+                          }
+                        />
+                        <button
+                          type="submit"
+                          className="w-full py-1.5 px-3 bg-[#27272A] hover:bg-[#3F3F46] text-white font-bold rounded-lg text-xs transition"
+                        >
+                          Salvar Alteração
+                        </button>
+                      </form>
+                      <div className="bg-amber-950/40 border border-amber-800 text-amber-300 p-2 rounded-lg text-[11px]">
+                        ⚠️ Aviso: A exclusão é permanente e destrói o valuation
+                        do banco de dados.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!ebtAtivaId) return;
+                          try {
+                            await api.excluirEBT(ebtAtivaId);
+                            await carregarListaEBTs();
+                            notificarSucesso("Workspace EBT excluído.");
+                          } catch (err) {
+                            notificarErro(err);
+                          }
+                        }}
+                        className="w-full py-1.5 px-3 bg-red-950 hover:bg-red-900 border border-red-800 text-red-200 font-bold rounded-lg text-xs transition"
+                      >
+                        Excluir Startup
+                      </button>
+                    </div>
+                  </details>
+                </div>
+
+                {/* Nova Consultoria (Apenas Admin) */}
+                {ehAdmin && (
+                  <details className="bg-[#18181B] border border-[#2E2E32] rounded-xl p-3 text-xs">
+                    <summary className="font-bold cursor-pointer text-slate-300 hover:text-white">
+                      ➕ Nova Consultoria (Onboarding Tenant)
+                    </summary>
+                    <form
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        try {
+                          await api.criarTenant({
+                            nome_consultoria: novaConsultoria.nome_consultoria,
+                            slug: novaConsultoria.slug,
+                            email_dono: novaConsultoria.email_dono,
+                            nome_dono: `Dono ${novaConsultoria.nome_consultoria}`,
+                            plano: novaConsultoria.plano,
+                          });
+                          notificarSucesso("Consultoria criada com sucesso!");
+                          setNovaConsultoria({
+                            nome_consultoria: "",
+                            slug: "",
+                            email_dono: "diretor@consultoria.com",
+                            plano: "free",
+                          });
+                        } catch (err) {
+                          notificarErro(err);
+                        }
+                      }}
+                      className="space-y-2 mt-3"
+                    >
+                      <input
+                        className="w-full bg-[#121212] border border-[#3F3F46] rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#E30000]"
+                        placeholder="Nome da Consultoria"
+                        value={novaConsultoria.nome_consultoria}
+                        onChange={(e) =>
+                          setNovaConsultoria({
+                            ...novaConsultoria,
+                            nome_consultoria: e.target.value,
+                          })
+                        }
+                        required
+                      />
+                      <input
+                        className="w-full bg-[#121212] border border-[#3F3F46] rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#E30000]"
+                        placeholder="Identificador (slug, ex: nordeste-vc)"
+                        value={novaConsultoria.slug}
+                        onChange={(e) =>
+                          setNovaConsultoria({
+                            ...novaConsultoria,
+                            slug: e.target.value,
+                          })
+                        }
+                        required
+                      />
+                      <select
+                        className="w-full bg-[#121212] border border-[#3F3F46] rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#E30000]"
+                        value={novaConsultoria.plano}
+                        onChange={(e) =>
+                          setNovaConsultoria({
+                            ...novaConsultoria,
+                            plano: e.target.value as PlanoCodigo,
+                          })
+                        }
+                      >
+                        <option value="free">FREE (Gratuito)</option>
+                        <option value="starter">STARTER</option>
+                        <option value="pro">PRO</option>
+                        <option value="enterprise">ENTERPRISE</option>
+                      </select>
+                      <button
+                        type="submit"
+                        className="st-btn w-full !py-1.5 !text-xs"
+                      >
+                        Criar Consultoria
+                      </button>
+                    </form>
+                  </details>
+                )}
+              </div>
+
+              {/* Rodapé do Drawer */}
+              <div className="p-4 border-t border-[#27272A] bg-[#0A0A0A] text-[11px] text-slate-400 flex items-center justify-between">
+                <span>🔒 Sessão Criptografada JWT</span>
+                <span>Multi-Tenant RBAC</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          MODAL RÁPIDO: CRIAR NOVA STARTUP (ACIONADO PELO TOP NAVBAR)
+      ===================================================================== */}
+      {modalNovaStartupAberto && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-[#121212] border border-[#27272A] rounded-2xl max-w-md w-full p-6 text-white space-y-4 shadow-2xl font-executive">
+            <div className="flex items-center justify-between pb-3 border-b border-[#27272A]">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">🚀</span>
+                <h3 className="text-sm font-black uppercase text-white">
+                  Criar Novo Workspace EBT
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalNovaStartupAberto(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!novoNomeStartup.trim()) return;
+                try {
+                  const criada = await api.criarEBT({
+                    nome_startup: novoNomeStartup.trim(),
+                  });
+                  setNovoNomeStartup("");
+                  setModalNovaStartupAberto(false);
+                  await carregarListaEBTs(criada.id);
+                  notificarSucesso(
+                    "Workspace EBT criado e auditado com sucesso!"
+                  );
+                } catch (err) {
+                  notificarErro(err);
+                }
+              }}
+              className="space-y-4"
+            >
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                  Nome da Nova Operação (EBT) *
+                </label>
+                <input
+                  required
+                  autoFocus
+                  className="w-full bg-[#1A1A1A] border border-[#3F3F46] rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-[#E30000] focus:ring-1 focus:ring-[#E30000]"
+                  placeholder="Ex: FinTech NextGen"
+                  value={novoNomeStartup}
+                  onChange={(e) => setNovoNomeStartup(e.target.value)}
+                />
+              </div>
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setModalNovaStartupAberto(false)}
+                  className="px-4 py-2 text-xs font-bold rounded-lg bg-[#27272A] hover:bg-[#3F3F46] text-white"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="st-btn px-4 py-2 !text-xs font-bold"
+                >
+                  Criar Startup
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          3. ÁREA PRINCIPAL — CONTEÚDO EXECUTIVO E ABAS OPERACIONAIS
+      ===================================================================== */}
+      <main className="flex-1 max-w-[1920px] w-full mx-auto p-4 sm:p-6 space-y-6">
+        {/* Sub-Cabeçalho Executivo do Workspace */}
+        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-xl bg-[#0A0A0A] border border-[#27272A] text-white flex items-center justify-center text-xl font-black shadow-sm flex-shrink-0">
+              <span className="text-[#E30000]">M</span>M
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-xl sm:text-2xl font-black text-[#0F172A] tracking-tight">
+                  Startup: {dadosEBT?.ebt.nome_startup || "Carregando..."}
+                </h1>
+                <span className="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                  ID: {ebtAtivaId ? ebtAtivaId.slice(0, 8) : "..."}
+                </span>
+              </div>
+              <p className="text-xs text-slate-600 mt-1 flex items-center gap-2 flex-wrap">
+                <span>
+                  Consultoria: <strong>{sessao.tenant.nome}</strong>
+                </span>
+                <span>·</span>
+                <span>
+                  Plano:{" "}
+                  <strong className="uppercase">
+                    {sessao.tenant.plano_codigo}
+                  </strong>
+                </span>
+                <span>·</span>
+                <span>
+                  Papel:{" "}
+                  <code className="bg-slate-100 px-1.5 py-0.5 rounded font-bold uppercase text-slate-800">
+                    {sessao.membership_ativa.papel}
+                  </code>
+                </span>
+                <span>·</span>
+                <span
+                  className={`font-bold ${
+                    podeEditarDiagnostico
+                      ? "text-emerald-700"
+                      : "text-amber-700"
+                  }`}
+                >
+                  {podeEditarDiagnostico
+                    ? "✏️ Edição Habilitada"
+                    : "🔒 Modo Somente Leitura"}
+                </span>
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setDrawerPerfilAberto(true)}
+              className="px-3.5 py-2 text-xs font-bold rounded-lg border border-slate-300 hover:bg-slate-50 text-slate-700 transition flex items-center gap-1.5"
+            >
+              <span>⚙️</span> Configurações
+            </button>
+            <button
+              type="button"
+              onClick={() => setModalNovaStartupAberto(true)}
+              className="st-btn !py-2 !px-3.5 !text-xs font-bold"
+            >
+              <span>➕</span> Nova Startup
+            </button>
+          </div>
+        </div>
+
+        {/* Notificações Globais de Erro e Sucesso */}
         {erroGlobal && (
-          <div className="bg-red-50 border-l-4 border-red-600 text-red-900 p-3.5 rounded-lg text-sm flex justify-between items-center">
-            <span>🔒 {erroGlobal}</span>
+          <div
+            role="alert"
+            className="bg-red-50 border-l-4 border-[#E30000] text-red-950 p-4 rounded-xl text-sm flex justify-between items-center shadow-sm"
+          >
+            <span className="flex items-center gap-2">
+              <span className="text-[#E30000] text-base">⚠️</span>
+              <span>{erroGlobal}</span>
+            </span>
             <button
               onClick={() => setErroGlobal(null)}
-              className="text-xs font-bold underline ml-4"
+              className="text-xs font-bold text-[#E30000] hover:underline ml-4"
             >
               Fechar
             </button>
           </div>
         )}
         {msgSucesso && (
-          <div className="bg-emerald-50 border-l-4 border-emerald-600 text-emerald-900 p-3.5 rounded-lg text-sm">
-            ✅ {msgSucesso}
+          <div
+            role="status"
+            className="bg-emerald-50 border-l-4 border-emerald-600 text-emerald-950 p-4 rounded-xl text-sm flex justify-between items-center shadow-sm"
+          >
+            <span className="flex items-center gap-2">
+              <span className="text-emerald-600 text-base">✅</span>
+              <span>{msgSucesso}</span>
+            </span>
+            <button
+              onClick={() => setMsgSucesso(null)}
+              className="text-xs font-bold text-emerald-800 hover:underline ml-4"
+            >
+              Fechar
+            </button>
           </div>
         )}
-
-        {/* Barra de Navegação Principal */}
-        <nav className="bg-white p-2.5 pb-0 rounded-xl shadow-sm border border-slate-200 flex flex-wrap gap-1.5">
-          {ABAS_STREAMLIT.filter((t) => !t.adminOnly || ehAdmin).map((t) => {
-            const ativa = abaAtiva === t.id;
-            return (
-              <button
-                key={t.id}
-                onClick={() => setAbaAtiva(t.id)}
-                className={`h-11 px-3.5 rounded-t-lg text-xs font-bold transition border-b-4 ${
-                  ativa
-                    ? "bg-[#2563EB] text-white border-[#1D4ED8]"
-                    : "bg-[#F1F5F9] text-[#0F172A] border-transparent hover:bg-slate-200"
-                }`}
-              >
-                {t.label}
-              </button>
-            );
-          })}
-        </nav>
 
         {/* ===================================================================
             ABA 1: 🧩 LEAN CANVAS
@@ -1803,7 +2818,7 @@ export default function App() {
                   Total Requisitado para a Rodada de Financiamento (Seed /
                   Pre-Seed)
                 </div>
-                <div className="text-2xl font-black text-[#2563EB] mt-1">
+                <div className="text-2xl font-black text-[#E30000] mt-1">
                   {fmtBRL(viab?.capex_total)}
                 </div>
               </div>
@@ -1941,7 +2956,7 @@ export default function App() {
                 <div className="text-xs font-bold text-slate-500">
                   Piso do Burn Rate de Manutenção
                 </div>
-                <div className="text-2xl font-black text-[#2563EB] mt-1">
+                <div className="text-2xl font-black text-[#E30000] mt-1">
                   {fmtBRL(dre?.opex_fixo_mensal)} ao mês
                 </div>
               </div>
@@ -2345,7 +3360,7 @@ export default function App() {
               ))}
               <div className="w-full bg-slate-200 h-3 rounded-full overflow-hidden mt-2">
                 <div
-                  className="bg-[#2563EB] h-full transition-all"
+                  className="bg-[#E30000] h-full transition-all"
                   style={{ width: `${(pontuacaoSeguranca / 4) * 100}%` }}
                 />
               </div>
@@ -2420,7 +3435,7 @@ export default function App() {
                   <div className="text-xs text-slate-500 font-semibold">
                     Capacidade Recorrente (MRR)
                   </div>
-                  <div className="text-lg font-black text-[#2563EB]">
+                  <div className="text-lg font-black text-[#E30000]">
                     {fmtBRL(dre?.mrr_bruto_total)}
                   </div>
                 </div>
@@ -2428,7 +3443,7 @@ export default function App() {
                   <div className="text-xs text-slate-500 font-semibold">
                     Annual Recurring Revenue (ARR)
                   </div>
-                  <div className="text-lg font-black text-[#2563EB]">
+                  <div className="text-lg font-black text-[#E30000]">
                     {fmtBRL(dre?.arr_anualizado)}
                   </div>
                 </div>
@@ -2436,7 +3451,7 @@ export default function App() {
                   <div className="text-xs text-slate-500 font-semibold">
                     Velocidade do Burn Rate
                   </div>
-                  <div className="text-lg font-black text-[#2563EB]">
+                  <div className="text-lg font-black text-[#E30000]">
                     {fmtBRL(dre?.burn_rate_total_mensal)}/mês
                   </div>
                 </div>
@@ -2444,7 +3459,7 @@ export default function App() {
                   <div className="text-xs text-slate-500 font-semibold">
                     Índice Multiplicador LTV/CAC
                   </div>
-                  <div className="text-lg font-black text-[#2563EB]">
+                  <div className="text-lg font-black text-[#E30000]">
                     {(ue?.indice_ltv_cac || 0).toFixed(2)}x
                   </div>
                 </div>
@@ -2505,7 +3520,7 @@ export default function App() {
                 <div className="text-xs font-bold text-slate-500">
                   Esforço Total em Capex (O Tamanho da Rodada)
                 </div>
-                <div className="text-xl font-black text-[#2563EB] mt-1">
+                <div className="text-xl font-black text-[#E30000] mt-1">
                   {fmtBRL(viab.capex_total)}
                 </div>
               </div>
@@ -2513,7 +3528,7 @@ export default function App() {
                 <div className="text-xs font-bold text-slate-500">
                   Geração Global de Riqueza Acumulada (VPL)
                 </div>
-                <div className="text-xl font-black text-[#2563EB] mt-1">
+                <div className="text-xl font-black text-[#E30000] mt-1">
                   {fmtBRL(viab.valor_presente_liquido_vpl)}
                 </div>
                 <div
@@ -2532,7 +3547,7 @@ export default function App() {
                 <div className="text-xs font-bold text-slate-500">
                   Retorno Base Projetado (TIR)
                 </div>
-                <div className="text-xl font-black text-[#2563EB] mt-1">
+                <div className="text-xl font-black text-[#E30000] mt-1">
                   {viab.validade_da_tir &&
                   viab.taxa_interna_retorno_anual_pct !== null &&
                   viab.taxa_interna_retorno_anual_pct !== undefined
@@ -2548,7 +3563,7 @@ export default function App() {
                 <div className="text-xs font-bold text-slate-500">
                   Ponto de Retorno Efetivo do Fundo (Payback)
                 </div>
-                <div className="text-lg font-black text-[#2563EB] mt-1">
+                <div className="text-lg font-black text-[#E30000] mt-1">
                   {viab.mes_de_breakeven_payback_texto}
                 </div>
               </div>
@@ -2702,7 +3717,7 @@ export default function App() {
                     <div className="text-xs text-slate-500">
                       Probabilidade de VPL &gt; 0
                     </div>
-                    <div className="text-lg font-black text-[#2563EB]">
+                    <div className="text-lg font-black text-[#E30000]">
                       {resultadoMC.probabilidade_vpl_positivo_pct.toFixed(1)}%
                     </div>
                   </div>
@@ -2710,7 +3725,7 @@ export default function App() {
                     <div className="text-xs text-slate-500">
                       VPL Pessimista (P10)
                     </div>
-                    <div className="text-lg font-black text-[#2563EB]">
+                    <div className="text-lg font-black text-[#E30000]">
                       {fmtBRL(resultadoMC.vpl_p10_pessimista)}
                     </div>
                   </div>
@@ -2718,7 +3733,7 @@ export default function App() {
                     <div className="text-xs text-slate-500">
                       VPL Mediano (P50)
                     </div>
-                    <div className="text-lg font-black text-[#2563EB]">
+                    <div className="text-lg font-black text-[#E30000]">
                       {fmtBRL(resultadoMC.vpl_mediana_p50)}
                     </div>
                   </div>
@@ -2726,7 +3741,7 @@ export default function App() {
                     <div className="text-xs text-slate-500">
                       VPL Otimista (P90)
                     </div>
-                    <div className="text-lg font-black text-[#2563EB]">
+                    <div className="text-lg font-black text-[#E30000]">
                       {fmtBRL(resultadoMC.vpl_p90_otimista)}
                     </div>
                   </div>
@@ -2841,7 +3856,7 @@ export default function App() {
                     <div className="text-xs font-bold text-slate-500">
                       Massa Faturada Vigente (MRR)
                     </div>
-                    <div className="text-xl font-black text-[#2563EB] mt-1">
+                    <div className="text-xl font-black text-[#E30000] mt-1">
                       {fmtBRL(dre.mrr_bruto_total)}
                     </div>
                     <div className="text-[11px] text-emerald-700 font-semibold mt-1">
@@ -2853,7 +3868,7 @@ export default function App() {
                     <div className="text-xs font-bold text-slate-500">
                       Estimativa de ARR Linear
                     </div>
-                    <div className="text-xl font-black text-[#2563EB] mt-1">
+                    <div className="text-xl font-black text-[#E30000] mt-1">
                       {fmtBRL(dre.arr_anualizado)}
                     </div>
                   </div>
@@ -2861,7 +3876,7 @@ export default function App() {
                     <div className="text-xs font-bold text-slate-500">
                       Sobrevivência da Margem Bruta
                     </div>
-                    <div className="text-xl font-black text-[#2563EB] mt-1">
+                    <div className="text-xl font-black text-[#E30000] mt-1">
                       {dre.margem_bruta_pct.toFixed(1)}%
                     </div>
                   </div>
@@ -2869,7 +3884,7 @@ export default function App() {
                     <div className="text-xs font-bold text-slate-500">
                       ARPU Efetivo (Ponderado Pagantes)
                     </div>
-                    <div className="text-xl font-black text-[#2563EB] mt-1">
+                    <div className="text-xl font-black text-[#E30000] mt-1">
                       {fmtBRL(ue.ticket_medio_arpu)}
                     </div>
                   </div>
@@ -2880,7 +3895,7 @@ export default function App() {
                     <div className="text-xs font-bold text-slate-500">
                       Geração Fria Operacional (EBITDA)
                     </div>
-                    <div className="text-xl font-black text-[#2563EB] mt-1">
+                    <div className="text-xl font-black text-[#E30000] mt-1">
                       {fmtBRL(dre.ebitda_mensal)}
                     </div>
                     <div
@@ -2899,7 +3914,7 @@ export default function App() {
                     <div className="text-xs font-bold text-slate-500">
                       O Efeito Global do Burn Rate Efetivo
                     </div>
-                    <div className="text-xl font-black text-[#2563EB] mt-1">
+                    <div className="text-xl font-black text-[#E30000] mt-1">
                       {fmtBRL(dre.burn_rate_total_mensal)}/mês
                     </div>
                   </div>
@@ -2907,7 +3922,7 @@ export default function App() {
                     <div className="text-xs font-bold text-slate-500">
                       Capacidade Funcional de Sobrevida (Runway)
                     </div>
-                    <div className="text-lg font-black text-[#2563EB] mt-1">
+                    <div className="text-lg font-black text-[#E30000] mt-1">
                       {viab.meses_runway_sobrevivencia
                         ? `${viab.meses_runway_sobrevivencia.toFixed(1)} meses restantes`
                         : "Infinitude e Escala de Segurança Total"}
@@ -2917,7 +3932,7 @@ export default function App() {
                     <div className="text-xs font-bold text-slate-500">
                       Potência de Retenção e Escala (LTV / CAC)
                     </div>
-                    <div className="text-xl font-black text-[#2563EB] mt-1">
+                    <div className="text-xl font-black text-[#E30000] mt-1">
                       {ue.indice_ltv_cac.toFixed(2)}x
                     </div>
                     <div className="text-[11px] font-semibold mt-1">
@@ -2935,7 +3950,7 @@ export default function App() {
                     <div className="text-xs font-bold text-slate-500">
                       Valor Gasto na Captação (CAC)
                     </div>
-                    <div className="text-xl font-black text-[#2563EB] mt-1">
+                    <div className="text-xl font-black text-[#E30000] mt-1">
                       {fmtBRL(ue.cac_estimado)}
                     </div>
                   </div>
@@ -2943,7 +3958,7 @@ export default function App() {
                     <div className="text-xs font-bold text-slate-500">
                       Rentabilidade Extraída Vitaliciamente (LTV)
                     </div>
-                    <div className="text-xl font-black text-[#2563EB] mt-1">
+                    <div className="text-xl font-black text-[#E30000] mt-1">
                       {fmtBRL(ue.ltv_vitalicio_cliente)}
                     </div>
                   </div>
@@ -2951,7 +3966,7 @@ export default function App() {
                     <div className="text-xs font-bold text-slate-500">
                       Fugas e Abandono Estimado (Churn)
                     </div>
-                    <div className="text-xl font-black text-[#2563EB] mt-1">
+                    <div className="text-xl font-black text-[#E30000] mt-1">
                       {dadosEBT.premissas.churn_mensal_pct.toFixed(1)}% ao Mês
                     </div>
                   </div>
@@ -2959,7 +3974,7 @@ export default function App() {
                     <div className="text-xs font-bold text-slate-500">
                       Payback de CAC
                     </div>
-                    <div className="text-lg font-black text-[#2563EB] mt-1">
+                    <div className="text-lg font-black text-[#E30000] mt-1">
                       {ue.meses_payback_cac
                         ? `${ue.meses_payback_cac.toFixed(1)} Períodos Faturados`
                         : "Incalculável"}
@@ -3149,56 +4164,265 @@ export default function App() {
               </div>
 
               {modoProvedorIA === "gemini" && (
-                <div>
-                  <label className="block text-xs font-bold mb-1">
-                    Credenciais Seguras: Chave da API Google Gemini:
-                  </label>
-                  <input
-                    type="password"
-                    className="st-input"
-                    value={chaveGemini}
-                    onChange={(e) => setChaveGemini(e.target.value)}
-                  />
+                <div className="space-y-3 bg-zinc-900/50 p-3 rounded-xl border border-zinc-700/60">
+                  <div>
+                    <label className="block text-xs font-bold text-white mb-1">
+                      Versão Inicial na Cascata Gemini (Waterfall 17 Modelos):
+                    </label>
+                    <select
+                      className="st-input font-bold"
+                      value={modeloGemini}
+                      onChange={(e) => setModeloGemini(e.target.value)}
+                    >
+                      <optgroup label="Geração Gemini 4 & 3 (Frontier & Agentes Autônomos)">
+                        <option value="gemini-4-argon">
+                          🚀 gemini-4-argon (Frontier / Máxima Capacidade Analítica)
+                        </option>
+                        <option value="gemini-3.1-pro-preview">
+                          🧠 gemini-3.1-pro-preview (Raciocínio Profundo & Estruturado)
+                        </option>
+                        <option value="gemini-3.8-flash">
+                          ⚡ gemini-3.8-flash (Engenharia & Agentes de Alto Desempenho)
+                        </option>
+                        <option value="gemini-3.6-flash">
+                          ⚡ gemini-3.6-flash (Multimodal Balanceado)
+                        </option>
+                        <option value="gemini-3-flash-preview">
+                          ⚡ gemini-3-flash-preview (Alta Velocidade Frontier)
+                        </option>
+                        <option value="gemini-3.5-flash-lite">
+                          ⚡ gemini-3.5-flash-lite (Otimizado para Alto Débito)
+                        </option>
+                        <option value="gemini-3.1-flash-lite">
+                          ⚡ gemini-3.1-flash-lite (Flash-Lite de Entrada)
+                        </option>
+                      </optgroup>
+
+                      <optgroup label="Geração Gemini 2.5">
+                        <option value="gemini-2.5-pro">
+                          🧠 gemini-2.5-pro (Raciocínio Avançado 2.5)
+                        </option>
+                        <option value="gemini-2.5-flash">
+                          ⚡ gemini-2.5-flash (Flash 2.5 de Baixa Latência)
+                        </option>
+                        <option value="gemini-2.5-flash-lite">
+                          ⚡ gemini-2.5-flash-lite (Flash Leve e Eficiente)
+                        </option>
+                      </optgroup>
+
+                      <optgroup label="Geração Gemini 2.0">
+                        <option value="gemini-2.0-pro">
+                          🧠 gemini-2.0-pro (Raciocínio Profundo 2.0)
+                        </option>
+                        <option value="gemini-2.0-flash">
+                          ⚡ gemini-2.0-flash (Flash Multimodal 2.0)
+                        </option>
+                        <option value="gemini-2.0-flash-lite">
+                          ⚡ gemini-2.0-flash-lite (Flash-Lite 2.0)
+                        </option>
+                      </optgroup>
+
+                      <optgroup label="Geração Gemini 1.5">
+                        <option value="gemini-1.5-pro">
+                          🧠 gemini-1.5-pro (Context Window 2M Tokens)
+                        </option>
+                        <option value="gemini-1.5-flash">
+                          ⚡ gemini-1.5-flash (Flash 1.5 Rápido)
+                        </option>
+                        <option value="gemini-1.5-flash-8b">
+                          ⚡ gemini-1.5-flash-8b (Ultra-Leve 8B)
+                        </option>
+                      </optgroup>
+
+                      <optgroup label="Geração Gemini 1.0 (Legado)">
+                        <option value="gemini-1.0-pro">
+                          🏛️ gemini-1.0-pro (Legado Frontier 1.0)
+                        </option>
+                      </optgroup>
+                    </select>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Cascata inteligente: esgota rigorosamente 3 tentativas com backoff exponencial por modelo antes de recuar para o tier seguinte (4 → 3 → 2.5 → 2.0 → 1.5 → 1.0).
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-white mb-1">
+                      Credenciais Seguras: Chave da API Google Gemini:
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="AIzaSy... (opcional se já configurada no backend via GEMINI_API_KEY)"
+                      className="st-input"
+                      value={chaveGemini}
+                      onChange={(e) => setChaveGemini(e.target.value)}
+                    />
+                  </div>
                 </div>
               )}
+
+              <div className="flex items-center pt-1">
+                <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer text-slate-300 hover:text-white">
+                  <input
+                    type="checkbox"
+                    checked={permitirFallbackAutomatico}
+                    onChange={(e) =>
+                      setPermitirFallbackAutomatico(e.target.checked)
+                    }
+                  />
+                  🛡️ Resiliência Ativa: Fallback automático para Copiloto VC
+                  Interno se o Gemini estiver indisponível
+                </label>
+              </div>
 
               <button
                 type="button"
                 disabled={processandoAcao}
-                onClick={async () => {
-                  try {
-                    setProcessandoAcao(true);
-                    const res = await api.solicitarParecerIA(ebtAtivaId, {
-                      usar_gemini: modoProvedorIA === "gemini",
-                      gemini_api_key: chaveGemini || undefined,
-                      forcar_regeneracao: forcarRegeneracaoIA,
-                    });
-                    await carregarEBTCompleta(ebtAtivaId);
-                    notificarSucesso(
-                      res.em_cache
-                        ? "⚡ Cache Hit Inteligente! Parecer recuperado sem consumir sua quota mensal!"
-                        : "Parecer gerado e registrado com sucesso!"
-                    );
-                  } catch (err) {
-                    notificarErro(err);
-                  } finally {
-                    setProcessandoAcao(false);
-                  }
-                }}
-                className="st-btn w-full"
+                onClick={() => handleSolicitarParecerIA(ebtAtivaId, false)}
+                className="st-btn w-full flex items-center justify-center gap-2"
               >
-                🚀 Solicitar Parecer Governado ao Comitê VC
+                <span>{processandoAcao ? "⏳" : "🚀"}</span>
+                <span>
+                  {processandoAcao
+                    ? "Consultando Comitê de IA..."
+                    : "Solicitar Parecer Governado ao Comitê VC"}
+                </span>
               </button>
             </div>
 
+            {/* Alerta Estruturado de Falha de IA com Código Padronizado e Ações de Fallback */}
+            {alertaFalhaIA && (
+              <div
+                role="alert"
+                aria-live="polite"
+                className="bg-[#18181B] border-2 border-[#E30000] rounded-2xl p-4 sm:p-5 text-white space-y-3.5 shadow-xl animate-in fade-in"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-red-950/80 border border-[#E30000] flex items-center justify-center text-xl flex-shrink-0">
+                      ⚠️
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="text-sm font-extrabold text-white">
+                          Comunicação com o Provedor de IA Interrompida
+                        </h4>
+                        <span className="px-2 py-0.5 rounded bg-[#E30000] text-white font-black text-[11px] tracking-wider uppercase">
+                          Código: {alertaFalhaIA.codigo_erro}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-mono text-[11px] font-bold">
+                          Estado: PENDING_SYNC
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-200 mt-1 leading-relaxed">
+                        {alertaFalhaIA.mensagem_amigavel}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAlertaFalhaIA(null)}
+                    className="text-slate-400 hover:text-white font-bold text-xs p-1 rounded-lg"
+                    aria-label="Dispensar aviso de erro de IA"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="bg-[#121212] border border-[#27272A] rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2 text-slate-300">
+                    <span>💾</span>
+                    <span>
+                      <strong>Modo de Persistência Ativo (PENDING_SYNC):</strong> Os dados da
+                      requisição foram salvos em cache local e aguardam sincronização.
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Botão 1: Reprocessar Análise (Cascata) */}
+                    <button
+                      type="button"
+                      disabled={processandoAcao}
+                      onClick={() =>
+                        handleSolicitarParecerIA(ebtAtivaId, false)
+                      }
+                      className="px-3.5 py-1.5 rounded-lg bg-[#E30000] hover:bg-[#C00000] text-white font-black text-xs inline-flex items-center gap-1.5 transition shadow-sm focus:outline-none focus:ring-2 focus:ring-[#E30000]"
+                      title="Executar nova varredura em cascata em todas as gerações do Gemini (Gerações 4 a 1.0)"
+                    >
+                      <span>🔄</span>
+                      <span>
+                        {processandoAcao ? "Processando Cascata..." : "Reprocessar Análise"}
+                      </span>
+                    </button>
+
+                    {/* Botão 2: Fallback Imediato Copiloto */}
+                    <button
+                      type="button"
+                      disabled={processandoAcao}
+                      onClick={() => handleSolicitarParecerIA(ebtAtivaId, true)}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs inline-flex items-center gap-1.5 transition shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                      title="Gerar parecer instantâneo utilizando o Copiloto Institucional sem depender de provedor externo"
+                    >
+                      <span>⚡</span>
+                      <span>
+                        Gerar Agora via Copiloto VC (Fallback Imediato)
+                      </span>
+                    </button>
+
+                    {/* Botão 3: Limpar Fila de Persistência / Destravar */}
+                    <button
+                      type="button"
+                      onClick={handleLimparOutboxCompleto}
+                      className="px-3.5 py-1.5 rounded-lg border border-red-700/80 bg-red-950/90 hover:bg-red-900 text-red-200 hover:text-white font-bold text-xs inline-flex items-center gap-1.5 transition shadow-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                      title="Limpar todos os itens da fila de persistência do navegador e destravar a interface"
+                    >
+                      <span>🗑️</span>
+                      <span>Limpar Fila de Persistência</span>
+                    </button>
+                  </div>
+                </div>
+
+                {alertaFalhaIA.detalhe_tecnico && (
+                  <details className="text-[11px] text-slate-400 pt-1">
+                    <summary className="cursor-pointer hover:text-slate-200">
+                      Rastreabilidade Técnica / Diagnóstico do Erro
+                    </summary>
+                    <pre className="mt-1.5 p-2 rounded bg-black/80 border border-[#27272A] text-red-300 whitespace-pre-wrap font-mono">
+                      {alertaFalhaIA.detalhe_tecnico}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            )}
+
             {dadosEBT.ia_governanca.ultima_analise && (
               <div className="st-card space-y-4">
+                {/* Badge de Telemetria de Resolução e Modelo Ativo */}
+                <div className="bg-[#121212] border border-[#27272A] rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-base">🚀</span>
+                    <span className="text-slate-400">Modelo Resolvido:</span>
+                    <span className="text-white font-mono font-black text-xs px-2 py-0.5 rounded bg-zinc-900 border border-zinc-700">
+                      {dadosEBT.ia_governanca.ultima_analise.modelo_resolvido ||
+                        dadosEBT.ia_governanca.ultima_analise.modelo}
+                    </span>
+                    {dadosEBT.ia_governanca.ultima_analise.geracao_resolvida && (
+                      <span className="px-2 py-0.5 rounded-full bg-red-950/80 border border-[#E30000] text-red-300 text-[11px] font-bold">
+                        {dadosEBT.ia_governanca.ultima_analise.geracao_resolvida}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 text-slate-300 text-xs">
+                    <span>⏱️ Tentativas na cascata:</span>
+                    <span className="px-2 py-0.5 rounded bg-zinc-800 text-white font-mono font-bold">
+                      {dadosEBT.ia_governanca.ultima_analise.tentativas_executadas || 1} tentativa(s)
+                    </span>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div>
                     <div className="text-xs text-slate-500">
                       Status de Homologação
                     </div>
-                    <div className="text-sm font-black text-[#2563EB]">
+                    <div className="text-sm font-black text-[#E30000]">
                       {dadosEBT.ia_governanca.ultima_analise
                         .aprovado_pelo_consultor
                         ? "✅ Aprovado pelo Consultor"
@@ -3404,7 +4628,7 @@ export default function App() {
                 <div className="text-xs font-bold text-slate-500">
                   Plano Contratado
                 </div>
-                <div className="text-xl font-black text-[#2563EB] uppercase mt-1">
+                <div className="text-xl font-black text-[#E30000] uppercase mt-1">
                   {painelGov.assinatura.plano_codigo}
                 </div>
                 <div className="text-[11px] text-emerald-700 font-semibold">
@@ -3415,7 +4639,7 @@ export default function App() {
                 <div className="text-xs font-bold text-slate-500">
                   Workspaces EBT Ativos
                 </div>
-                <div className="text-xl font-black text-[#2563EB] mt-1">
+                <div className="text-xl font-black text-[#E30000] mt-1">
                   {painelGov.uso_mensal.ebts_ativas} /{" "}
                   {painelGov.assinatura.limite_ebts}
                 </div>
@@ -3424,7 +4648,7 @@ export default function App() {
                 <div className="text-xs font-bold text-slate-500">
                   Análises IA ({painelGov.uso_mensal.ano_mes})
                 </div>
-                <div className="text-xl font-black text-[#2563EB] mt-1">
+                <div className="text-xl font-black text-[#E30000] mt-1">
                   {painelGov.uso_mensal.analises_ia_realizadas} /{" "}
                   {painelGov.assinatura.limite_analises_ia_mes}
                 </div>
@@ -3437,7 +4661,7 @@ export default function App() {
                 <div className="text-xs font-bold text-slate-500">
                   Dossiês PDF / Simulações ({painelGov.uso_mensal.ano_mes})
                 </div>
-                <div className="text-xl font-black text-[#2563EB] mt-1">
+                <div className="text-xl font-black text-[#E30000] mt-1">
                   {painelGov.uso_mensal.pdfs_gerados} /{" "}
                   {painelGov.assinatura.limite_pdfs_mes} PDFs
                 </div>
@@ -3915,7 +5139,7 @@ export default function App() {
                     <div className="text-xs font-bold text-slate-500">
                       Total de Usuários
                     </div>
-                    <div className="text-2xl font-black text-[#2563EB] mt-1">
+                    <div className="text-2xl font-black text-[#E30000] mt-1">
                       {usuariosRBAC.length}
                     </div>
                     <div className="text-[11px] text-slate-500">
@@ -3926,7 +5150,7 @@ export default function App() {
                     <div className="text-xs font-bold text-slate-500">
                       Administradores (ADMIN)
                     </div>
-                    <div className="text-2xl font-black text-[#2563EB] mt-1">
+                    <div className="text-2xl font-black text-[#E30000] mt-1">
                       {
                         usuariosRBAC.filter(
                           (u) => u.papel === "admin" || u.papel === "dono"
@@ -3941,7 +5165,7 @@ export default function App() {
                     <div className="text-xs font-bold text-slate-500">
                       Gestores / Analistas / Pro
                     </div>
-                    <div className="text-2xl font-black text-[#2563EB] mt-1">
+                    <div className="text-2xl font-black text-[#E30000] mt-1">
                       {
                         usuariosRBAC.filter((u) =>
                           [
@@ -4217,7 +5441,7 @@ export default function App() {
                                           className="w-8 h-8 rounded-full object-cover border border-slate-300"
                                         />
                                       ) : (
-                                        <div className="w-8 h-8 rounded-full bg-blue-100 text-[#2563EB] font-black flex items-center justify-center text-[11px]">
+                                        <div className="w-8 h-8 rounded-full bg-red-100 text-[#E30000] font-black flex items-center justify-center text-[11px]">
                                           {obterIniciais(u.nome_completo)}
                                         </div>
                                       )}
@@ -4225,7 +5449,7 @@ export default function App() {
                                         <div className="font-bold text-slate-900 flex items-center gap-1.5">
                                           <span>{u.nome_completo}</span>
                                           {ehProprioAdmin && (
-                                            <span className="px-1.5 py-0.5 text-[10px] rounded bg-blue-600 text-white font-bold">
+                                            <span className="px-1.5 py-0.5 text-[10px] rounded bg-[#E30000] text-white font-bold">
                                               Você
                                             </span>
                                           )}
@@ -4251,7 +5475,7 @@ export default function App() {
                                   <td className="p-2.5">
                                     {ehProprioAdmin ? (
                                       <div
-                                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-900 font-bold text-xs"
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-100 border border-zinc-300 text-zinc-900 font-bold text-xs"
                                         title="Impedido de remover seu próprio papel de administrador por segurança."
                                       >
                                         🔒 {u.papel.toUpperCase()} (Protegido)
@@ -4349,46 +5573,94 @@ export default function App() {
                                   </td>
 
                                   <td className="p-2.5 text-right">
-                                    <div className="inline-flex items-center gap-1.5">
+                                    <div className="inline-flex items-center gap-1.5 flex-wrap justify-end">
+                                      {/* 1. Mudar Plano */}
                                       <button
                                         type="button"
-                                        onClick={() => setUsuarioModalRBAC(u)}
-                                        className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-bold text-xs"
+                                        onClick={() => abrirModalPlano(u)}
+                                        className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-800 font-bold text-xs inline-flex items-center gap-1 transition focus:outline-none focus:ring-2 focus:ring-[#E30000]"
+                                        title={`Mudar plano de assinatura de ${u.nome_completo}`}
+                                        aria-label={`Mudar plano de ${u.nome_completo}`}
                                       >
-                                        ✏️ Detalhes
+                                        <span>💳</span> Plano
                                       </button>
+
+                                      {/* 2. Visualizar Uso */}
                                       <button
                                         type="button"
-                                        disabled={!houveMudanca}
-                                        onClick={async () => {
-                                          try {
-                                            await api.gerenciarAssinanteOAuthPeloAdmin(
-                                              u.membership_id,
-                                              {
-                                                novo_papel: edicao.papel,
-                                                novo_plano: edicao.plano_codigo,
-                                                ativo: edicao.ativo,
-                                              }
-                                            );
-                                            await carregarUsuariosDoPainelRBAC();
-                                            const s =
-                                              await api.obterSessaoAtual();
-                                            setSessao(s);
-                                            notificarSucesso(
-                                              `Alterações de RBAC para ${u.nome_completo} (${u.email}) salvas com sucesso!`
-                                            );
-                                          } catch (err) {
-                                            notificarErro(err);
-                                          }
-                                        }}
-                                        className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${
-                                          houveMudanca
-                                            ? "bg-[#2563EB] text-white hover:bg-blue-800 shadow-sm"
-                                            : "bg-slate-100 text-slate-400 cursor-not-allowed"
-                                        }`}
+                                        onClick={() => abrirModalUso(u)}
+                                        className="px-2.5 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100 text-indigo-900 font-bold text-xs inline-flex items-center gap-1 transition focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        title={`Visualizar consumo de recursos e métricas de ${u.nome_completo}`}
+                                        aria-label={`Visualizar uso de recursos de ${u.nome_completo}`}
                                       >
-                                        💾 Salvar
+                                        <span>📊</span> Uso
                                       </button>
+
+                                      {/* 3. Editar Dados */}
+                                      <button
+                                        type="button"
+                                        onClick={() => abrirModalEdicao(u)}
+                                        className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-800 font-bold text-xs inline-flex items-center gap-1 transition focus:outline-none focus:ring-2 focus:ring-[#E30000]"
+                                        title={`Editar dados cadastrais e permissões de ${u.nome_completo}`}
+                                        aria-label={`Editar dados de ${u.nome_completo}`}
+                                      >
+                                        <span>✏️</span> Editar
+                                      </button>
+
+                                      {/* 4. Excluir Conta (com trava para o próprio admin) */}
+                                      {ehProprioAdmin ? (
+                                        <button
+                                          type="button"
+                                          disabled
+                                          className="px-2 py-1.5 rounded-lg border border-zinc-200 bg-zinc-100 text-zinc-400 font-bold text-xs inline-flex items-center gap-1 cursor-not-allowed opacity-60"
+                                          title="Trava de segurança: Você não pode excluir a sua própria conta de Administrador."
+                                          aria-label="Exclusão bloqueada para o próprio Administrador"
+                                        >
+                                          <span>🔒</span> Protegido
+                                        </button>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => abrirModalExclusao(u)}
+                                          className="px-2.5 py-1.5 rounded-lg border border-red-200 bg-red-50/80 hover:bg-red-100 text-[#E30000] font-bold text-xs inline-flex items-center gap-1 transition focus:outline-none focus:ring-2 focus:ring-[#E30000]"
+                                          title={`Excluir definitivamente o registro de ${u.nome_completo}`}
+                                          aria-label={`Excluir conta de ${u.nome_completo}`}
+                                        >
+                                          <span>🗑️</span> Excluir
+                                        </button>
+                                      )}
+
+                                      {/* Salvamento rápido inline se houve mudança direta na linha */}
+                                      {houveMudanca && (
+                                        <button
+                                          type="button"
+                                          onClick={async () => {
+                                            try {
+                                              await api.gerenciarAssinanteOAuthPeloAdmin(
+                                                u.membership_id,
+                                                {
+                                                  novo_papel: edicao.papel,
+                                                  novo_plano: edicao.plano_codigo,
+                                                  ativo: edicao.ativo,
+                                                }
+                                              );
+                                              await carregarUsuariosDoPainelRBAC();
+                                              const s =
+                                                await api.obterSessaoAtual();
+                                              setSessao(s);
+                                              notificarSucesso(
+                                                `Alterações de RBAC para ${u.nome_completo} salvas com sucesso!`
+                                              );
+                                            } catch (err) {
+                                              notificarErro(err);
+                                            }
+                                          }}
+                                          className="px-2.5 py-1.5 rounded-lg font-bold text-xs bg-[#E30000] text-white hover:bg-[#C00000] shadow-sm inline-flex items-center gap-1"
+                                          title="Salvar alterações rápidas feitas nesta linha"
+                                        >
+                                          💾 Salvar
+                                        </button>
+                                      )}
                                     </div>
                                   </td>
                                 </tr>
@@ -4400,72 +5672,149 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Modal de Edição Detalhada de Usuário no Painel RBAC */}
-                {usuarioModalRBAC && (
-                  <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-lg w-full p-6 space-y-4">
+                {/* =============================================================
+                    MODAL 1: ✏️ EDITAR DADOS DO USUÁRIO
+                ============================================================= */}
+                {usuarioModalEdicao && (
+                  <div
+                    className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="modal-edicao-titulo"
+                  >
+                    <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-xl w-full p-6 space-y-4 my-8 animate-in fade-in duration-150">
                       <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-                        <h3 className="text-base font-extrabold text-[#0F172A]">
-                          ⚙️ Gerenciar Perfil RBAC —{" "}
-                          {usuarioModalRBAC.nome_completo}
-                        </h3>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xl">✏️</span>
+                          <div>
+                            <h3
+                              id="modal-edicao-titulo"
+                              className="text-base font-extrabold text-[#0F172A]"
+                            >
+                              Editar Dados do Usuário
+                            </h3>
+                            <p className="text-xs text-slate-500">
+                              {usuarioModalEdicao.nome_completo} • {usuarioModalEdicao.email}
+                            </p>
+                          </div>
+                        </div>
                         <button
                           type="button"
-                          onClick={() => setUsuarioModalRBAC(null)}
-                          className="text-xs font-bold text-slate-500 hover:text-slate-900"
+                          onClick={() => setUsuarioModalEdicao(null)}
+                          className="text-slate-400 hover:text-slate-700 font-bold p-1 rounded-lg"
+                          aria-label="Fechar modal de edição"
                         >
-                          ✕ Fechar
+                          ✕
                         </button>
                       </div>
 
-                      <div className="space-y-3 text-xs">
-                        <div>
-                          <label className="block font-bold text-slate-700 mb-1">
-                            Nome Completo
-                          </label>
-                          <input
-                            type="text"
-                            className="st-input text-xs"
-                            value={usuarioModalRBAC.nome_completo}
-                            onChange={(e) =>
-                              setUsuarioModalRBAC({
-                                ...usuarioModalRBAC,
-                                nome_completo: e.target.value,
-                              })
-                            }
-                          />
+                      <form onSubmit={handleSalvarEdicaoAvancada} className="space-y-3.5 text-xs">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block font-bold text-slate-700 mb-1">
+                              Nome Completo *
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              className="st-input text-xs"
+                              value={formEdicaoUsuario.nome_completo}
+                              onChange={(e) =>
+                                setFormEdicaoUsuario({
+                                  ...formEdicaoUsuario,
+                                  nome_completo: e.target.value,
+                                })
+                              }
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block font-bold text-slate-700 mb-1">
+                              E-mail Corporativo *
+                            </label>
+                            <input
+                              type="email"
+                              required
+                              disabled={usuarioModalEdicao.email.toLowerCase() === "marcolinoee@yahoo.com.br"}
+                              className={`st-input text-xs ${
+                                usuarioModalEdicao.email.toLowerCase() === "marcolinoee@yahoo.com.br"
+                                  ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                                  : ""
+                              }`}
+                              value={formEdicaoUsuario.email}
+                              onChange={(e) =>
+                                setFormEdicaoUsuario({
+                                  ...formEdicaoUsuario,
+                                  email: e.target.value,
+                                })
+                              }
+                            />
+                            {usuarioModalEdicao.email.toLowerCase() === "marcolinoee@yahoo.com.br" && (
+                              <span className="text-[10px] text-amber-700 font-medium">
+                                🔒 E-mail raiz do Administrador bloqueado contra alteração.
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <div>
-                          <label className="block font-bold text-slate-700 mb-1">
-                            E-mail (Identificador da Conta)
-                          </label>
-                          <input
-                            type="email"
-                            disabled
-                            className="st-input text-xs bg-slate-100 text-slate-500"
-                            value={usuarioModalRBAC.email}
-                          />
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block font-bold text-slate-700 mb-1">
+                              Cargo / Organização
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Ex: Diretor Financeiro / EBT Alpha"
+                              className="st-input text-xs"
+                              value={formEdicaoUsuario.cargo_organizacao}
+                              onChange={(e) =>
+                                setFormEdicaoUsuario({
+                                  ...formEdicaoUsuario,
+                                  cargo_organizacao: e.target.value,
+                                })
+                              }
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block font-bold text-slate-700 mb-1">
+                              Telefone / WhatsApp
+                            </label>
+                            <input
+                              type="tel"
+                              placeholder="+55 11 99999-9999"
+                              className="st-input text-xs"
+                              value={formEdicaoUsuario.telefone_whatsapp}
+                              onChange={(e) =>
+                                setFormEdicaoUsuario({
+                                  ...formEdicaoUsuario,
+                                  telefone_whatsapp: e.target.value,
+                                })
+                              }
+                            />
+                          </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
                           <div>
                             <label className="block font-bold text-slate-700 mb-1">
                               Papel / Role RBAC
                             </label>
                             <select
-                              disabled={
-                                usuarioModalRBAC.user_id === sessao.user.id
-                              }
-                              className="st-input text-xs font-bold"
-                              value={usuarioModalRBAC.papel}
+                              disabled={usuarioModalEdicao.user_id === sessao.user.id}
+                              className={`st-input text-xs font-bold ${
+                                usuarioModalEdicao.user_id === sessao.user.id
+                                  ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                                  : ""
+                              }`}
+                              value={formEdicaoUsuario.papel}
                               onChange={(e) => {
                                 const novoPapel = e.target.value as PapelRBAC;
-                                let novoPlano = usuarioModalRBAC.plano_codigo;
-                                if (novoPapel === "assinante_free")
-                                  novoPlano = "free";
-                                if (novoPapel === "assinante_pro")
-                                  novoPlano = "pro";
-                                setUsuarioModalRBAC({
-                                  ...usuarioModalRBAC,
+                                let novoPlano = formEdicaoUsuario.plano_codigo;
+                                if (novoPapel === "assinante_free") novoPlano = "free";
+                                if (novoPapel === "assinante_pro") novoPlano = "pro";
+                                setFormEdicaoUsuario({
+                                  ...formEdicaoUsuario,
                                   papel: novoPapel,
                                   plano_codigo: novoPlano,
                                 });
@@ -4478,16 +5827,17 @@ export default function App() {
                               ))}
                             </select>
                           </div>
+
                           <div>
                             <label className="block font-bold text-slate-700 mb-1">
-                              Plano de Assinatura
+                              Plano Atual
                             </label>
                             <select
                               className="st-input text-xs font-bold"
-                              value={usuarioModalRBAC.plano_codigo}
+                              value={formEdicaoUsuario.plano_codigo}
                               onChange={(e) =>
-                                setUsuarioModalRBAC({
-                                  ...usuarioModalRBAC,
+                                setFormEdicaoUsuario({
+                                  ...formEdicaoUsuario,
                                   plano_codigo: e.target.value as PlanoCodigo,
                                 })
                               }
@@ -4498,100 +5848,609 @@ export default function App() {
                               <option value="enterprise">ENTERPRISE</option>
                             </select>
                           </div>
-                        </div>
 
-                        <div className="grid grid-cols-2 gap-3">
                           <div>
                             <label className="block font-bold text-slate-700 mb-1">
-                              Cargo / Organização
-                            </label>
-                            <input
-                              type="text"
-                              className="st-input text-xs"
-                              value={usuarioModalRBAC.cargo_organizacao || ""}
-                              onChange={(e) =>
-                                setUsuarioModalRBAC({
-                                  ...usuarioModalRBAC,
-                                  cargo_organizacao: e.target.value,
-                                })
-                              }
-                            />
-                          </div>
-                          <div>
-                            <label className="block font-bold text-slate-700 mb-1">
-                              Status da Conta
+                              Status de Ativação
                             </label>
                             <select
-                              disabled={
-                                usuarioModalRBAC.user_id === sessao.user.id
-                              }
-                              className="st-input text-xs font-bold"
-                              value={
-                                usuarioModalRBAC.ativo !== false
-                                  ? "ativo"
-                                  : "inativo"
-                              }
+                              disabled={usuarioModalEdicao.user_id === sessao.user.id}
+                              className={`st-input text-xs font-bold ${
+                                usuarioModalEdicao.user_id === sessao.user.id
+                                  ? "bg-slate-100 text-slate-500 cursor-not-allowed"
+                                  : ""
+                              }`}
+                              value={formEdicaoUsuario.ativo ? "ativo" : "inativo"}
                               onChange={(e) =>
-                                setUsuarioModalRBAC({
-                                  ...usuarioModalRBAC,
+                                setFormEdicaoUsuario({
+                                  ...formEdicaoUsuario,
                                   ativo: e.target.value === "ativo",
                                 })
                               }
                             >
-                              <option value="ativo">Ativo</option>
-                              <option value="inativo">Inativo</option>
+                              <option value="ativo">● Ativo</option>
+                              <option value="inativo">○ Inativo</option>
                             </select>
                           </div>
                         </div>
 
-                        {usuarioModalRBAC.user_id === sessao.user.id && (
-                          <div className="bg-amber-50 border border-amber-200 text-amber-900 p-2.5 rounded-lg text-[11px]">
-                            🔒 Você está editando sua própria conta de
-                            Administrador. O papel <code>ADMIN</code> e o status{" "}
-                            <code>Ativo</code> estão bloqueados para impedir
-                            auto-remoção acidental.
+                        {usuarioModalEdicao.user_id === sessao.user.id && (
+                          <div className="bg-amber-50 border border-amber-200 text-amber-900 p-2.5 rounded-lg text-[11px] flex items-center gap-2">
+                            <span>🔒</span>
+                            <span>
+                              Você está editando a sua própria conta de Administrador. A Role <strong>ADMIN</strong> e o status <strong>Ativo</strong> estão bloqueados para proteger a governança do sistema.
+                            </span>
                           </div>
                         )}
-                      </div>
 
-                      <div className="flex justify-end gap-2 pt-3 border-t border-slate-200">
+                        <div className="flex justify-end gap-2 pt-4 border-t border-slate-200">
+                          <button
+                            type="button"
+                            onClick={() => setUsuarioModalEdicao(null)}
+                            className="px-4 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-100 transition"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={salvandoEdicao}
+                            className="st-btn !py-2 text-xs inline-flex items-center gap-1.5"
+                          >
+                            {salvandoEdicao ? "Salvando..." : "💾 Salvar Alterações"}
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  </div>
+                )}
+
+                {/* =============================================================
+                    MODAL 2: 📊 VISUALIZAR CONSUMO DE RECURSOS & MÉTRICAS DE USO
+                ============================================================= */}
+                {usuarioModalUso && (
+                  <div
+                    className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="modal-uso-titulo"
+                  >
+                    <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full p-6 space-y-5 my-8 animate-in fade-in duration-150">
+                      <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-9 h-9 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-700 font-black text-base">
+                            📊
+                          </div>
+                          <div>
+                            <h3
+                              id="modal-uso-titulo"
+                              className="text-base font-extrabold text-[#0F172A]"
+                            >
+                              Consumo de Recursos & Auditoria de Uso
+                            </h3>
+                            <p className="text-xs text-slate-500">
+                              {usuarioModalUso.nome_completo} ({usuarioModalUso.email})
+                            </p>
+                          </div>
+                        </div>
                         <button
                           type="button"
-                          onClick={() => setUsuarioModalRBAC(null)}
-                          className="px-4 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-100"
+                          onClick={() => setUsuarioModalUso(null)}
+                          className="text-slate-400 hover:text-slate-700 font-bold p-1 rounded-lg"
+                          aria-label="Fechar modal de uso"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      {carregandoUsoDetalhado ? (
+                        <div className="py-12 text-center text-xs text-slate-500 space-y-2">
+                          <div className="animate-spin text-2xl">⏳</div>
+                          <div>Carregando métricas analíticas e consumo de cotas...</div>
+                        </div>
+                      ) : dadosUsoDetalhado ? (
+                        <div className="space-y-4">
+                          {/* Banner de Plano e Tenant */}
+                          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-slate-700">Plano Ativo:</span>
+                              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-black bg-[#E30000] text-white uppercase tracking-wider">
+                                {dadosUsoDetalhado.plano.toUpperCase()}
+                              </span>
+                            </div>
+                            <div className="text-xs text-slate-600 font-medium">
+                              Organização: <strong>{dadosUsoDetalhado.tenant_nome}</strong>
+                            </div>
+                          </div>
+
+                          {/* 4 Cards de Métricas */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {/* Card 1: Simulações de Cenários */}
+                            <div className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-sm space-y-1.5">
+                              <div className="flex items-center justify-between text-xs text-slate-600">
+                                <span className="font-bold flex items-center gap-1.5">
+                                  <span>🎲</span> Simulações de Monte Carlo
+                                </span>
+                                <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
+                                  Ilimitadas
+                                </span>
+                              </div>
+                              <div className="text-2xl font-black text-slate-900">
+                                {dadosUsoDetalhado.consumo.simulacoes_executadas}
+                              </div>
+                              <p className="text-[10px] text-slate-500">
+                                Total de rodadas de estresse financeiro executadas na base.
+                              </p>
+                            </div>
+
+                            {/* Card 2: Análises de IA */}
+                            <div className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-sm space-y-1.5">
+                              <div className="flex items-center justify-between text-xs text-slate-600">
+                                <span className="font-bold flex items-center gap-1.5">
+                                  <span>✨</span> Pareceres IA (Gemini / Copiloto)
+                                </span>
+                                <span className="text-[11px] font-black text-slate-800">
+                                  {dadosUsoDetalhado.consumo.analises_ia_mes} / {dadosUsoDetalhado.limites.limite_analises_ia_mes}
+                                </span>
+                              </div>
+                              <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                                <div
+                                  className="h-2 rounded-full transition-all bg-[#E30000]"
+                                  style={{
+                                    width: `${Math.min(
+                                      100,
+                                      Math.round(
+                                        (dadosUsoDetalhado.consumo.analises_ia_mes /
+                                          (dadosUsoDetalhado.limites.limite_analises_ia_mes || 1)) *
+                                          100
+                                      )
+                                    )}%`,
+                                  }}
+                                />
+                              </div>
+                              <div className="flex justify-between items-center text-[10px] text-slate-500 pt-0.5">
+                                <span>Custo Acumulado IA:</span>
+                                <span className="font-bold text-slate-800">
+                                  US$ {dadosUsoDetalhado.consumo.custo_acumulado_ia_usd.toFixed(4)}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Card 3: Relatórios PDF */}
+                            <div className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-sm space-y-1.5">
+                              <div className="flex items-center justify-between text-xs text-slate-600">
+                                <span className="font-bold flex items-center gap-1.5">
+                                  <span>📄</span> Dossiês Executivos PDF
+                                </span>
+                                <span className="text-[11px] font-black text-slate-800">
+                                  {dadosUsoDetalhado.consumo.relatorios_pdf_mes} / {dadosUsoDetalhado.limites.limite_relatorios_pdf_mes}
+                                </span>
+                              </div>
+                              <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                                <div
+                                  className="h-2 rounded-full transition-all bg-indigo-600"
+                                  style={{
+                                    width: `${Math.min(
+                                      100,
+                                      Math.round(
+                                        (dadosUsoDetalhado.consumo.relatorios_pdf_mes /
+                                          (dadosUsoDetalhado.limites.limite_relatorios_pdf_mes || 1)) *
+                                          100
+                                      )
+                                    )}%`,
+                                  }}
+                                />
+                              </div>
+                              <p className="text-[10px] text-slate-500">
+                                Emissões de relatórios auditáveis neste ciclo de faturamento.
+                              </p>
+                            </div>
+
+                            {/* Card 4: EBTs Cadastradas */}
+                            <div className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-sm space-y-1.5">
+                              <div className="flex items-center justify-between text-xs text-slate-600">
+                                <span className="font-bold flex items-center gap-1.5">
+                                  <span>🏢</span> EBTs Cadastradas & Ativas
+                                </span>
+                                <span className="text-[11px] font-black text-slate-800">
+                                  {dadosUsoDetalhado.consumo.ebts_ativas_count} / {dadosUsoDetalhado.limites.limite_ebts_ativas}
+                                </span>
+                              </div>
+                              <div className="text-2xl font-black text-slate-900">
+                                {dadosUsoDetalhado.consumo.ebts_ativas_count}{" "}
+                                <span className="text-xs font-normal text-slate-500">
+                                  de {dadosUsoDetalhado.consumo.ebts_cadastradas_total} cadastradas
+                                </span>
+                              </div>
+                              <p className="text-[10px] text-slate-500">
+                                Capacidade máxima de empresas simultâneas do plano.
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Lista das EBTs do Usuário */}
+                          <div className="border border-slate-200 rounded-xl p-3 bg-slate-50/50 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-slate-700">
+                                Empresas de Base Tecnológica Vinculadas:
+                              </span>
+                              <span className="text-[11px] font-semibold text-slate-500">
+                                {dadosUsoDetalhado.ebts.length} registradas
+                              </span>
+                            </div>
+
+                            {dadosUsoDetalhado.ebts.length === 0 ? (
+                              <p className="text-xs text-slate-500 italic py-2">
+                                Nenhuma EBT vinculada a este usuário até o momento.
+                              </p>
+                            ) : (
+                              <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
+                                {dadosUsoDetalhado.ebts.map((ebt) => (
+                                  <div
+                                    key={ebt.id}
+                                    className="flex items-center justify-between bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs"
+                                  >
+                                    <div>
+                                      <div className="font-bold text-slate-900">{ebt.razao_social}</div>
+                                      <div className="text-[10px] text-slate-500">
+                                        {ebt.setor} • {ebt.estagio}
+                                      </div>
+                                    </div>
+                                    <span
+                                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                        ebt.ativa
+                                          ? "bg-emerald-100 text-emerald-800"
+                                          : "bg-slate-100 text-slate-600"
+                                      }`}
+                                    >
+                                      {ebt.ativa ? "Ativa" : "Inativa"}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div className="flex justify-end pt-3 border-t border-slate-200">
+                        <button
+                          type="button"
+                          onClick={() => setUsuarioModalUso(null)}
+                          className="px-4 py-2 rounded-lg bg-slate-900 text-white hover:bg-black text-xs font-bold transition"
+                        >
+                          Fechar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* =============================================================
+                    MODAL 3: 💳 MUDAR PLANO DE ASSINATURA
+                ============================================================= */}
+                {usuarioModalPlano && (
+                  <div
+                    className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="modal-plano-titulo"
+                  >
+                    <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full p-6 space-y-4 my-8 animate-in fade-in duration-150">
+                      <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xl">💳</span>
+                          <div>
+                            <h3
+                              id="modal-plano-titulo"
+                              className="text-base font-extrabold text-[#0F172A]"
+                            >
+                              Alterar Plano do Assinante
+                            </h3>
+                            <p className="text-xs text-slate-500">
+                              {usuarioModalPlano.nome_completo} ({usuarioModalPlano.email})
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setUsuarioModalPlano(null)}
+                          className="text-slate-400 hover:text-slate-700 font-bold p-1 rounded-lg"
+                          aria-label="Fechar modal de plano"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      <div className="space-y-3">
+                        <p className="text-xs text-slate-600">
+                          Selecione o novo tier de assinatura para conceder cotas ampliadas de simulações, pareceres de IA e relatórios executivos:
+                        </p>
+
+                        <div className="space-y-2">
+                          {[
+                            {
+                              cod: "free" as PlanoCodigo,
+                              nome: "FREE TIER",
+                              badge: "Gratuito",
+                              desc: "1 EBT Ativa • 5 Análises IA/mês • 3 Relatórios PDF • Modelos Determinísticos & Gemini Flash",
+                            },
+                            {
+                              cod: "starter" as PlanoCodigo,
+                              nome: "STARTER",
+                              badge: "Essencial",
+                              desc: "3 EBTs Ativas • 20 Análises IA/mês • 10 Relatórios PDF • Gemini 2.5 Flash",
+                            },
+                            {
+                              cod: "pro" as PlanoCodigo,
+                              nome: "PRO",
+                              badge: "Mais Popular",
+                              desc: "10 EBTs Ativas • 100 Análises IA/mês • Relatórios Ilimitados • Gemini 2.5 Pro + Flash",
+                            },
+                            {
+                              cod: "enterprise" as PlanoCodigo,
+                              nome: "ENTERPRISE",
+                              badge: "Corporativo",
+                              desc: "EBTs Ilimitadas • IA Dedicada Ilimitada • Suporte Prioritário & Auditoria VC Personalizada",
+                            },
+                          ].map((p) => {
+                            const selecionado = novoPlanoSelecionado === p.cod;
+                            const ehAtual = usuarioModalPlano.plano_codigo === p.cod;
+                            return (
+                              <label
+                                key={p.cod}
+                                className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${
+                                  selecionado
+                                    ? "border-[#E30000] bg-red-50/50 shadow-sm"
+                                    : "border-slate-200 hover:border-slate-300 bg-white"
+                                }`}
+                              >
+                                <input
+                                  type="radio"
+                                  name="plano_selecionado"
+                                  className="mt-1"
+                                  checked={selecionado}
+                                  onChange={() => setNovoPlanoSelecionado(p.cod)}
+                                />
+                                <div className="flex-1 text-xs">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-extrabold text-slate-900">{p.nome}</span>
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">
+                                      {p.badge}
+                                    </span>
+                                    {ehAtual && (
+                                      <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-blue-100 text-blue-800">
+                                        Atual
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-slate-500 mt-0.5 text-[11px] leading-relaxed">
+                                    {p.desc}
+                                  </p>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end gap-2 pt-4 border-t border-slate-200">
+                        <button
+                          type="button"
+                          onClick={() => setUsuarioModalPlano(null)}
+                          className="px-4 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-100 transition"
                         >
                           Cancelar
                         </button>
                         <button
                           type="button"
-                          onClick={async () => {
-                            try {
-                              await api.gerenciarAssinanteOAuthPeloAdmin(
-                                usuarioModalRBAC.membership_id,
-                                {
-                                  novo_papel: usuarioModalRBAC.papel,
-                                  novo_plano: usuarioModalRBAC.plano_codigo,
-                                  ativo: usuarioModalRBAC.ativo !== false,
-                                  nome_completo: usuarioModalRBAC.nome_completo,
-                                  cargo_organizacao:
-                                    usuarioModalRBAC.cargo_organizacao,
-                                }
-                              );
-                              setUsuarioModalRBAC(null);
-                              await carregarUsuariosDoPainelRBAC();
-                              const s = await api.obterSessaoAtual();
-                              setSessao(s);
-                              notificarSucesso(
-                                "Perfil RBAC do usuário atualizado com sucesso!"
-                              );
-                            } catch (err) {
-                              notificarErro(err);
-                            }
-                          }}
+                          disabled={salvandoPlano || novoPlanoSelecionado === usuarioModalPlano.plano_codigo}
+                          onClick={handleSalvarMudancaPlano}
                           className="st-btn !py-2 text-xs"
                         >
-                          💾 Salvar Alterações
+                          {salvandoPlano ? "Atualizando..." : "💳 Confirmar Alteração de Plano"}
                         </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* =============================================================
+                    MODAL 4: 🗑️ CONFIRMAR EXCLUSÃO DEFINITIVA DE CONTA
+                ============================================================= */}
+                {usuarioModalExclusao && (
+                  <div
+                    className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="modal-exclusao-titulo"
+                  >
+                    <div className="bg-white rounded-2xl shadow-2xl border border-red-200 max-w-md w-full p-6 space-y-4 my-8 animate-in fade-in duration-150">
+                      <div className="flex items-center gap-3 text-red-600">
+                        <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-xl font-black">
+                          ⚠️
+                        </div>
+                        <div>
+                          <h3
+                            id="modal-exclusao-titulo"
+                            className="text-base font-extrabold text-[#0F172A]"
+                          >
+                            Excluir Conta Definitivamente?
+                          </h3>
+                          <p className="text-xs text-red-700 font-semibold">
+                            Ação irreversível de segurança
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="p-3 bg-red-50/70 border border-red-200 rounded-xl space-y-2 text-xs text-slate-700">
+                        <p>
+                          Você está prestes a desativar e excluir do banco de dados o cadastro de:
+                        </p>
+                        <div className="bg-white p-2.5 rounded-lg border border-red-200 space-y-1">
+                          <div className="font-bold text-slate-900">
+                            {usuarioModalExclusao.nome_completo}
+                          </div>
+                          <div className="text-slate-600">
+                            E-mail: <strong>{usuarioModalExclusao.email}</strong>
+                          </div>
+                          <div className="text-slate-600">
+                            Papel: <strong>{usuarioModalExclusao.papel.toUpperCase()}</strong> | Plano: <strong>{usuarioModalExclusao.plano_codigo.toUpperCase()}</strong>
+                          </div>
+                        </div>
+                        <p className="text-[11px] text-red-700 font-medium">
+                          Todos os vínculos de sessão, credenciais de login e associações organizacionais deste usuário serão revogados imediatamente.
+                        </p>
+                      </div>
+
+                      <div className="flex justify-end gap-2 pt-3 border-t border-slate-200">
+                        <button
+                          type="button"
+                          onClick={() => setUsuarioModalExclusao(null)}
+                          className="px-4 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-100 transition"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="button"
+                          disabled={executandoExclusao}
+                          onClick={handleConfirmarExclusaoUsuario}
+                          className="px-4 py-2 rounded-lg bg-[#E30000] text-white hover:bg-[#C00000] text-xs font-extrabold shadow-sm transition inline-flex items-center gap-1.5 focus:outline-none focus:ring-2 focus:ring-[#E30000]"
+                        >
+                          {executandoExclusao ? "Excluindo..." : "🗑️ Sim, Excluir Registro"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* =============================================================
+                    MODAL DE FILA DE PERSISTÊNCIA OFFLINE / OUTBOX IA
+                ============================================================= */}
+                {mostrarModalOutbox && (
+                  <div
+                    className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto font-executive"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="modal-outbox-titulo"
+                  >
+                    <div className="bg-[#121212] border border-[#27272A] rounded-2xl max-w-2xl w-full text-white shadow-2xl p-6 space-y-4 my-8 animate-in fade-in">
+                      <div className="flex items-center justify-between border-b border-[#27272A] pb-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-9 h-9 rounded-xl bg-red-950 border border-[#E30000] flex items-center justify-center text-[#E30000] font-black text-base">
+                            📡
+                          </div>
+                          <div>
+                            <h3
+                              id="modal-outbox-titulo"
+                              className="text-base font-extrabold text-white"
+                            >
+                              Fila de Persistência Offline — Solicitações de IA
+                            </h3>
+                            <p className="text-xs text-slate-400">
+                              Gerenciamento de solicitações armazenadas localmente em caso de instabilidade na API.
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setMostrarModalOutbox(false)}
+                          className="text-slate-400 hover:text-white font-bold p-1 rounded-lg"
+                          aria-label="Fechar modal de outbox"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      {pendenciasOutbox.length === 0 ? (
+                        <div className="py-8 text-center text-xs text-slate-400">
+                          <p>Nenhuma solicitação pendente no armazenamento local.</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
+                          {pendenciasOutbox.map((p) => (
+                            <div
+                              key={p.id}
+                              className="p-3 bg-[#1A1A1A] border border-[#27272A] rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs"
+                            >
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-extrabold text-white">
+                                    {p.ebt_nome}
+                                  </span>
+                                  <span className="px-2 py-0.5 rounded bg-red-950 text-red-300 border border-red-800 text-[10px] font-bold uppercase">
+                                    {p.codigo_erro}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400">
+                                    {new Date(p.timestamp).toLocaleTimeString(
+                                      "pt-BR"
+                                    )}
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-slate-300 leading-tight">
+                                  {p.mensagem_erro}
+                                </p>
+                                <div className="text-[10px] text-slate-400">
+                                  Modelo:{" "}
+                                  <span className="font-bold text-white">
+                                    {p.modelo_gemini}
+                                  </span>{" "}
+                                  • EBT ID: <code>{p.ebt_id}</code>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleRemoverPendenciaOutbox(p.id)
+                                  }
+                                  className="px-2.5 py-1.5 rounded-lg border border-[#3F3F46] bg-[#27272A] hover:bg-[#3F3F46] text-slate-300 text-xs font-semibold transition"
+                                  title="Remover esta solicitação da fila"
+                                >
+                                  Descartar
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-[#27272A]">
+                        <div>
+                          {pendenciasOutbox.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={handleLimparOutboxCompleto}
+                              className="text-xs text-red-400 hover:text-red-300 underline font-semibold"
+                            >
+                              Limpar toda a fila
+                            </button>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setMostrarModalOutbox(false)}
+                            className="px-4 py-2 rounded-lg border border-[#3F3F46] text-xs font-bold text-slate-300 hover:bg-[#27272A] transition"
+                          >
+                            Fechar
+                          </button>
+                          {pendenciasOutbox.length > 0 && (
+                            <button
+                              type="button"
+                              disabled={sincronizandoOutbox}
+                              onClick={handleSincronizarPendenciasOutbox}
+                              className="st-btn !py-2 text-xs inline-flex items-center gap-1.5"
+                            >
+                              <span>{sincronizandoOutbox ? "⏳" : "🔄"}</span>
+                              <span>
+                                {sincronizandoOutbox
+                                  ? "Sincronizando..."
+                                  : "Sincronizar Todas"}
+                              </span>
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -4624,10 +6483,10 @@ export default function App() {
                   <img
                     src={formMeuPerfil.avatar_url}
                     alt={formMeuPerfil.nome_completo}
-                    className="w-24 h-24 rounded-full object-cover border-4 border-[#2563EB] shadow-md"
+                    className="w-24 h-24 rounded-full object-cover border-4 border-[#E30000] shadow-md"
                   />
                 ) : (
-                  <div className="w-24 h-24 rounded-full bg-[#2563EB] text-white font-black text-2xl flex items-center justify-center shadow-md">
+                  <div className="w-24 h-24 rounded-full bg-[#E30000] text-white font-black text-2xl flex items-center justify-center shadow-md">
                     {obterIniciais(formMeuPerfil.nome_completo)}
                   </div>
                 )}
@@ -4641,7 +6500,7 @@ export default function App() {
                   </p>
                   {(formMeuPerfil.cargo_organizacao ||
                     sessao.user.cargo_organizacao) && (
-                    <p className="text-xs font-semibold text-[#2563EB] mt-1">
+                    <p className="text-xs font-semibold text-[#E30000] mt-1">
                       {formMeuPerfil.cargo_organizacao ||
                         sessao.user.cargo_organizacao}
                     </p>
@@ -4654,7 +6513,7 @@ export default function App() {
                     <span className="text-slate-500 font-semibold">
                       Papel RBAC Atual:
                     </span>
-                    <span className="px-2.5 py-0.5 rounded-full bg-blue-600 text-white font-bold uppercase text-[11px]">
+                    <span className="px-2.5 py-0.5 rounded-full bg-[#E30000] text-white font-bold uppercase text-[11px]">
                       {sessao.membership_ativa.papel}
                     </span>
                   </div>
@@ -4702,7 +6561,7 @@ export default function App() {
                         }
                         className={`rounded-full p-0.5 border-2 transition ${
                           formMeuPerfil.avatar_url === url
-                            ? "border-[#2563EB] scale-105"
+                            ? "border-[#E30000] scale-105"
                             : "border-transparent hover:border-slate-300"
                         }`}
                       >
@@ -4866,7 +6725,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => setMostrarSenhaPerfil((v) => !v)}
-                      className="text-xs font-bold text-[#2563EB] hover:underline"
+                      className="text-xs font-bold text-[#E30000] hover:underline"
                     >
                       {mostrarSenhaPerfil
                         ? "🙈 Ocultar senhas"

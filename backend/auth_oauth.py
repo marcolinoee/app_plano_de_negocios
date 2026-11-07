@@ -40,8 +40,10 @@ from .models import (
     PremissasEBT,
     StatusAssinatura,
     Tenant,
+    UsoMedidoTenant,
     User,
 )
+from .servicos import obter_ou_criar_uso_mensal
 from .rbac import (
     MATRIZ_PERMISSOES_RBAC,
     ErroPermissaoRBAC,
@@ -846,7 +848,7 @@ def garantir_superadmin_inicial(db: Session) -> Tuple[User, Membership]:
         db.add(user_admin)
         db.flush()
     else:
-        if not user_admin.senha_hash:
+        if not user_admin.senha_hash or not verificar_senha_hash(SENHA_SUPERADMIN_INICIAL, user_admin.senha_hash):
             user_admin.senha_hash = gerar_hash_senha(SENHA_SUPERADMIN_INICIAL)
         if not user_admin.provedor_auth_sub:
             user_admin.provedor_auth_sub = f"credentials:{EMAIL_SUPERADMIN_INICIAL}"
@@ -1407,6 +1409,23 @@ def listar_usuarios_oauth_registrados(
                 .filter(ClienteEBT.tenant_id == m.tenant_id, ClienteEBT.ativo.is_(True))
                 .all()
             )
+            uso = (
+                db.query(UsoMedidoTenant)
+                .filter(UsoMedidoTenant.tenant_id == m.tenant_id)
+                .order_by(UsoMedidoTenant.ano_mes.desc())
+                .first()
+            )
+            consumo_uso = {
+                "simulacoes_executadas": uso.simulacoes_executadas if uso else 0,
+                "analises_ia_realizadas": uso.analises_ia_realizadas if uso else 0,
+                "pdfs_gerados": uso.pdfs_gerados if uso else 0,
+                "custo_ia_usd": round(uso.custo_ia_acumulado_usd, 4) if uso else 0.0,
+                "total_ebts": len(ebts_tenant),
+                "limite_ebts": ass.limite_ebts if ass else 1,
+                "limite_analises_ia_mes": ass.limite_analises_ia_mes if ass else 5,
+                "limite_pdfs_mes": ass.limite_pdfs_mes if ass else 5,
+                "ano_mes": uso.ano_mes if uso else datetime.now(timezone.utc).strftime("%Y-%m"),
+            }
             resultado.append(
                 {
                     "user_id": u.id,
@@ -1429,6 +1448,7 @@ def listar_usuarios_oauth_registrados(
                         {"id": e.id, "nome_startup": e.nome_startup}
                         for e in ebts_tenant
                     ],
+                    "consumo_uso": consumo_uso,
                     "criado_em": u.criado_em.isoformat() if u.criado_em else None,
                 }
             )
@@ -1445,14 +1465,15 @@ def gerenciar_assinante_oauth_pelo_admin(
     ebt_restrita_id: Optional[str] = None,
     ativo: Optional[bool] = None,
     nome_completo: Optional[str] = None,
+    email: Optional[str] = None,
     cargo_organizacao: Optional[str] = None,
     telefone_whatsapp: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Exclusivo para o Administrador (`admin` / `dono`):
     Gerencia o Papel/Role RBAC (`ADMIN`, `GESTOR`, `ANALISTA`, `ASSINANTE_FREE`,
-    `ASSINANTE_PRO`, `CONSULTOR`, `FUNDADOR`, `INVESTIDOR`), Status (`Ativo`/`Inativo`)
-    e Plano de Assinatura de qualquer usuário no Painel Admin RBAC.
+    `ASSINANTE_PRO`, `CONSULTOR`, `FUNDADOR`, `INVESTIDOR`), Status (`Ativo`/`Inativo`),
+    Dados Cadastrais e Plano de Assinatura de qualquer usuário no Painel Admin RBAC.
 
     Restrição de Segurança Obrigatória:
     Impede que o administrador remova seu próprio papel de administrador ou inative
@@ -1500,6 +1521,25 @@ def gerenciar_assinante_oauth_pelo_admin(
 
     if nome_completo is not None and nome_completo.strip():
         user_alvo.nome_completo = nome_completo.strip()
+    if email is not None and email.strip():
+        novo_email = email.strip().lower()
+        if "@" not in novo_email:
+            raise ValueError("O formato do e-mail informado é inválido.")
+        existente = (
+            db.query(User)
+            .filter(User.email == novo_email, User.id != user_alvo.id)
+            .first()
+        )
+        if existente is not None:
+            raise ValueError(f"Já existe uma conta cadastrada com o e-mail '{novo_email}'.")
+        if (
+            user_alvo.email.strip().lower() == "marcolinoee@yahoo.com.br"
+            and novo_email != "marcolinoee@yahoo.com.br"
+        ):
+            raise ErroPermissaoRBAC(
+                "Trava de segurança: O e-mail do Super Administrador oficial ('marcolinoee@yahoo.com.br') não pode ser alterado."
+            )
+        user_alvo.email = novo_email
     if cargo_organizacao is not None:
         user_alvo.cargo_organizacao = cargo_organizacao.strip()
     if telefone_whatsapp is not None:
@@ -1594,4 +1634,159 @@ def gerenciar_assinante_oauth_pelo_admin(
         "ebt_restrita_id": m_alvo.ebt_restrita_id,
         "tenant_id": m_alvo.tenant_id,
         "plano_codigo": ass.plano_codigo if ass else "free",
+    }
+
+
+def excluir_usuario_pelo_admin(
+    db: Session,
+    *,
+    membership_admin: Membership,
+    membership_alvo_id: str,
+) -> Dict[str, Any]:
+    """
+    Exclusivo para o Administrador (ADMIN / DONO):
+    Exclui a conta do usuário do banco de dados com segurança.
+
+    Trava de Segurança Obrigatória:
+    Impede que o superadministrador logado ('marcolinoee@yahoo.com.br')
+    seja excluído acidentalmente.
+    """
+    db.info["bypass_rls"] = True
+
+    if membership_admin.papel not in (
+        PapelMembro.ADMIN.value,
+        PapelMembro.DONO.value,
+    ):
+        raise ErroPermissaoRBAC(
+            "Apenas o Administrador (ADMIN) possui permissão para excluir contas de usuários."
+        )
+
+    m_alvo = db.get(Membership, membership_alvo_id)
+    if m_alvo is None:
+        raise LookupError("Vínculo (Membership) do usuário não encontrado.")
+
+    user_alvo = db.get(User, m_alvo.user_id)
+    if user_alvo is None:
+        raise LookupError("Usuário não encontrado.")
+
+    # Trava de Segurança Estrita: O Super Administrador não pode ser excluído
+    if (
+        user_alvo.email.strip().lower() == "marcolinoee@yahoo.com.br"
+        or user_alvo.id == membership_admin.user_id
+    ):
+        raise ErroPermissaoRBAC(
+            "Trava de segurança: O Super Administrador ('marcolinoee@yahoo.com.br') não pode ser excluído."
+        )
+
+    email_excluido = user_alvo.email
+    nome_excluido = user_alvo.nome_completo
+    user_id_excluido = user_alvo.id
+    tenant_id = m_alvo.tenant_id
+
+    # Remove todos os memberships vinculados a este usuário
+    memberships_usuario = (
+        db.query(Membership).filter(Membership.user_id == user_alvo.id).all()
+    )
+    for m in memberships_usuario:
+        db.delete(m)
+
+    # Exclui o registro definitivo do usuário
+    db.delete(user_alvo)
+    db.flush()
+
+    registrar_evento_auditoria(
+        db,
+        tenant_id=tenant_id,
+        user_id=membership_admin.user_id,
+        acao="admin.excluir_usuario_oauth",
+        entidade_tipo="User",
+        entidade_id=user_id_excluido,
+        resumo=f"Admin excluiu a conta do usuário '{email_excluido}' ({nome_excluido}) do banco de dados.",
+        dados_anteriores={
+            "user_id": user_id_excluido,
+            "email": email_excluido,
+            "nome_completo": nome_excluido,
+        },
+        dados_novos=None,
+    )
+
+    return {
+        "sucesso": True,
+        "mensagem": f"Conta do usuário '{email_excluido}' excluída com sucesso do banco de dados.",
+        "user_id": user_id_excluido,
+        "email": email_excluido,
+    }
+
+
+def obter_uso_usuario_pelo_admin(
+    db: Session,
+    *,
+    membership_admin: Membership,
+    membership_alvo_id: str,
+) -> Dict[str, Any]:
+    """Retorna os dados analíticos de consumo e limites da conta do usuário."""
+    db.info["bypass_rls"] = True
+
+    if membership_admin.papel not in (
+        PapelMembro.ADMIN.value,
+        PapelMembro.DONO.value,
+    ):
+        raise ErroPermissaoRBAC(
+            "Apenas o Administrador (ADMIN) possui permissão para visualizar o uso de contas."
+        )
+
+    m_alvo = db.get(Membership, membership_alvo_id)
+    if m_alvo is None:
+        raise LookupError("Vínculo (Membership) do usuário não encontrado.")
+
+    user_alvo = db.get(User, m_alvo.user_id)
+    if user_alvo is None:
+        raise LookupError("Usuário não encontrado.")
+
+    t = db.get(Tenant, m_alvo.tenant_id)
+    ass = (
+        db.query(AssinaturaTenant)
+        .filter(AssinaturaTenant.tenant_id == m_alvo.tenant_id)
+        .first()
+    )
+    uso = (
+        db.query(UsoMedidoTenant)
+        .filter(UsoMedidoTenant.tenant_id == m_alvo.tenant_id)
+        .order_by(UsoMedidoTenant.ano_mes.desc())
+        .first()
+    )
+    ebts_tenant = (
+        db.query(ClienteEBT)
+        .filter(ClienteEBT.tenant_id == m_alvo.tenant_id, ClienteEBT.ativo.is_(True))
+        .all()
+    )
+
+    ano_mes_atual = datetime.now(timezone.utc).strftime("%Y-%m")
+    return {
+        "user_id": user_alvo.id,
+        "membership_id": m_alvo.id,
+        "email": user_alvo.email,
+        "nome_completo": user_alvo.nome_completo,
+        "papel": m_alvo.papel,
+        "plano_codigo": ass.plano_codigo if ass else "free",
+        "tenant_nome": t.nome if t else "Workspace",
+        "ativo": bool(user_alvo.ativo and m_alvo.ativo),
+        "consumo": {
+            "simulacoes_executadas": uso.simulacoes_executadas if uso else 0,
+            "analises_ia_realizadas": uso.analises_ia_realizadas if uso else 0,
+            "pdfs_gerados": uso.pdfs_gerados if uso else 0,
+            "custo_ia_usd": round(uso.custo_ia_acumulado_usd, 4) if uso else 0.0,
+            "ano_mes": uso.ano_mes if uso else ano_mes_atual,
+        },
+        "limites": {
+            "limite_ebts": ass.limite_ebts if ass else 1,
+            "limite_analises_ia_mes": ass.limite_analises_ia_mes if ass else 5,
+            "limite_pdfs_mes": ass.limite_pdfs_mes if ass else 5,
+            "permite_monte_carlo": ass.permite_monte_carlo if ass else False,
+            "permite_white_label": ass.permite_white_label if ass else False,
+        },
+        "ebts": [
+            {"id": e.id, "nome_startup": e.nome_startup, "ativo": e.ativo}
+            for e in ebts_tenant
+        ],
     }

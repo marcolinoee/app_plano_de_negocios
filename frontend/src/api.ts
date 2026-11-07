@@ -1,7 +1,11 @@
 import {
+  CodigoFalhaIA,
+  ErroFalhaIA,
   PapelRBAC,
   PlanoCodigo,
   SessaoAutenticada,
+  SolicitacaoIAPendenteOutbox,
+  UsoUsuarioDetalhado,
   UsuarioOAuthRegistrado,
   WorkspaceEBTCompleto,
   WorkspaceEBTResumo,
@@ -12,6 +16,7 @@ const API_BASE =
     ?.VITE_API_BASE_URL || "/v1";
 
 const TOKEN_STORAGE_KEY = "mm_saas_jwt_token";
+const OUTBOX_IA_STORAGE_KEY = "mm_saas_ia_outbox_pendencias";
 
 export function obterTokenSalvo(): string | null {
   return localStorage.getItem(TOKEN_STORAGE_KEY);
@@ -23,6 +28,40 @@ export function salvarToken(token: string): void {
 
 export function limparToken(): void {
   localStorage.removeItem(TOKEN_STORAGE_KEY);
+}
+
+// ── Persistência Offline / Outbox para IA ────────────────────────────────────
+
+export function carregarOutboxIA(): SolicitacaoIAPendenteOutbox[] {
+  try {
+    const raw = localStorage.getItem(OUTBOX_IA_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function salvarNoOutboxIA(item: SolicitacaoIAPendenteOutbox): void {
+  const outbox = carregarOutboxIA().filter((p) => p.id !== item.id);
+  outbox.unshift(item);
+  localStorage.setItem(OUTBOX_IA_STORAGE_KEY, JSON.stringify(outbox));
+}
+
+export function removerDoOutboxIA(id: string): void {
+  const outbox = carregarOutboxIA().filter((p) => p.id !== id);
+  localStorage.setItem(OUTBOX_IA_STORAGE_KEY, JSON.stringify(outbox));
+}
+
+export function limparOutboxIA(): void {
+  localStorage.removeItem(OUTBOX_IA_STORAGE_KEY);
+}
+
+export interface RequisicaoApiErro extends Error {
+  status?: number;
+  codigo_erro?: string;
+  mensagem_amigavel?: string;
+  detalhe?: string;
+  suporta_offline?: boolean;
 }
 
 async function requisicao<T>(
@@ -38,20 +77,83 @@ async function requisicao<T>(
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const resp = await fetch(`${API_BASE}${caminho}`, {
-    ...opcoes,
-    headers,
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(`${API_BASE}${caminho}`, {
+      ...opcoes,
+      headers,
+    });
+  } catch (err: unknown) {
+    const erroObj = err as { name?: string; message?: string };
+    const ehTimeout =
+      erroObj.name === "AbortError" ||
+      (erroObj.message && erroObj.message.toLowerCase().includes("timeout"));
+    const ehOffline = typeof navigator !== "undefined" && !navigator.onLine;
+
+    const codigo: CodigoFalhaIA = ehTimeout
+      ? "ERR_GEMINI_TIMEOUT_504"
+      : ehOffline
+      ? "ERR_NETWORK_DISCONNECTED"
+      : "ERR_GEMINI_ALL_MODELS_EXHAUSTED";
+
+    const msgAmigavel = ehTimeout
+      ? "Tempo de resposta esgotado nos servidores de IA (Código: ERR_GEMINI_TIMEOUT_504)."
+      : ehOffline
+      ? "Sem ligação à internet detectada (Código: ERR_NETWORK_DISCONNECTED). Seus dados foram guardados localmente."
+      : "Serviço temporariamente indisponível após múltiplas tentativas em todas as versões. Os seus dados foram guardados localmente (Código: ERR_GEMINI_ALL_MODELS_EXHAUSTED).";
+
+    const netErr: RequisicaoApiErro = new Error(msgAmigavel);
+    netErr.codigo_erro = codigo;
+    netErr.mensagem_amigavel = msgAmigavel;
+    netErr.detalhe = erroObj.message || String(err);
+    netErr.suporta_offline = true;
+    netErr.status = 503;
+    throw netErr;
+  }
 
   if (!resp.ok) {
     let detalhe = `Erro HTTP ${resp.status}`;
+    let codigoErro = "";
+    let mensagemAmigavel = "";
+
     try {
       const jsonErro = await resp.json();
-      detalhe = jsonErro.detail || JSON.stringify(jsonErro);
+      if (typeof jsonErro.detail === "object" && jsonErro.detail !== null) {
+        codigoErro = jsonErro.detail.codigo_erro || "";
+        mensagemAmigavel = jsonErro.detail.mensagem_amigavel || "";
+        detalhe =
+          jsonErro.detail.mensagem_amigavel ||
+          jsonErro.detail.detalhe_tecnico ||
+          JSON.stringify(jsonErro.detail);
+      } else {
+        detalhe = jsonErro.detail || JSON.stringify(jsonErro);
+        codigoErro = jsonErro.codigo_erro || "";
+        mensagemAmigavel = jsonErro.mensagem_amigavel || "";
+      }
     } catch {
       detalhe = await resp.text();
     }
-    throw new Error(detalhe);
+
+    if (!codigoErro) {
+      if (resp.status === 504) codigoErro = "ERR_GEMINI_TIMEOUT_504";
+      else if (resp.status >= 500)
+        codigoErro = "ERR_GEMINI_ALL_MODELS_EXHAUSTED";
+      else if (resp.status === 401 || resp.status === 403)
+        codigoErro = "ERR_GEMINI_AUTH_401";
+      else if (resp.status === 429) codigoErro = "ERR_GEMINI_RATE_LIMIT_429";
+      else if (resp.status === 422) codigoErro = "ERR_VALIDACAO_DADOS";
+      else if (resp.status === 400) codigoErro = "ERR_REQUISICAO_INVALIDA";
+    }
+
+    const erroPersonalizado: RequisicaoApiErro = new Error(
+      mensagemAmigavel || detalhe
+    );
+    erroPersonalizado.status = resp.status;
+    erroPersonalizado.codigo_erro = codigoErro;
+    erroPersonalizado.mensagem_amigavel = mensagemAmigavel;
+    erroPersonalizado.detalhe = detalhe;
+    erroPersonalizado.suporta_offline = resp.status >= 500 || resp.status === 408;
+    throw erroPersonalizado;
   }
 
   return resp.json() as Promise<T>;
@@ -180,6 +282,7 @@ export const api = {
       ebt_restrita_id?: string | null;
       ativo?: boolean;
       nome_completo?: string;
+      email?: string;
       cargo_organizacao?: string;
       telefone_whatsapp?: string;
     }
@@ -198,6 +301,19 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(dados),
     }),
+
+  excluirUsuarioPeloAdmin: (membershipId: string) =>
+    requisicao<{
+      sucesso: boolean;
+      mensagem: string;
+      user_id: string;
+      email: string;
+    }>(`/admin/usuarios/${membershipId}`, {
+      method: "DELETE",
+    }),
+
+  obterUsoUsuarioPeloAdmin: (membershipId: string) =>
+    requisicao<UsoUsuarioDetalhado>(`/admin/usuarios/${membershipId}/uso`),
 
   listarTenants: () =>
     requisicao<
@@ -360,18 +476,28 @@ export const api = {
     dados: {
       usar_gemini: boolean;
       gemini_api_key?: string;
+      modelo_gemini?: string;
       forcar_regeneracao: boolean;
-    }
+      permitir_fallback_copiloto?: boolean;
+    },
+    signal?: AbortSignal
   ) =>
     requisicao<{
       id: string;
+      provedor?: string;
+      modelo?: string;
+      modelo_resolvido?: string;
+      tentativas_executadas?: number;
+      geracao_resolvida?: string;
       parecer_gerado_md: string;
       parecer_revisado_consultor_md?: string | null;
       aprovado_pelo_consultor: boolean;
       em_cache: boolean;
+      fallback_acionado?: boolean;
     }>(`/ebts/${ebtId}/ia/parecer`, {
       method: "POST",
       body: JSON.stringify(dados),
+      signal,
     }),
 
   homologarParecerIA: (analiseId: string, texto_revisado_md: string) =>

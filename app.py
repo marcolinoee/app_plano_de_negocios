@@ -1695,12 +1695,22 @@ with aba_mentor_vc:
         )
 
     chave_api_usuario = ""
+    modelo_gemini_escolhido = "gemini-3.8"
     if modo_provedor_ia.startswith("✨"):
-        chave_api_usuario = st.text_input(
-            "Credenciais Seguras: Chave da API Google Gemini:",
-            type="password",
-            key="gemini_key_widget",
-        )
+        col_key, col_mod = st.columns([2, 1])
+        with col_key:
+            chave_api_usuario = st.text_input(
+                "Credenciais Seguras: Chave da API Google Gemini:",
+                type="password",
+                key="gemini_key_widget",
+            )
+        with col_mod:
+            modelo_gemini_escolhido = st.selectbox(
+                "Modelo Gemini (Versão Recente):",
+                options=["gemini-3.8", "gemini-3.8-flash", "gemini-3.8-pro"],
+                index=0,
+                help="gemini-3.8 é a versão mais atual da API. gemini-3.8-flash oferece alta velocidade e gemini-3.8-pro oferece auditoria VC aprofundada.",
+            )
 
     if st.button("🚀 Solicitar Parecer Governado ao Comitê VC", type="primary"):
         if modo_provedor_ia.startswith("✨") and not chave_api_usuario.strip():
@@ -1709,7 +1719,7 @@ with aba_mentor_vc:
             try:
                 with st.spinner("Executando pipeline governado de IA (Sanitização PII -> Verificação de Cache/Quota -> Geração)..."):
                     provedor_selecionado = (
-                        ProvedorGeminiIA(api_key=chave_api_usuario.strip(), modelo="gemini-2.5-flash")
+                        ProvedorGeminiIA(api_key=chave_api_usuario.strip(), modelo=modelo_gemini_escolhido)
                         if modo_provedor_ia.startswith("✨")
                         else ProvedorAuditoriaDeterministicoIA()
                     )

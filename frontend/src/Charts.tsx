@@ -143,7 +143,7 @@ export const GraficoRoscaBurnRate: React.FC<{
 }> = ({ cogsNuvem, opexFixo, impostosGateways }) => {
   const total = Math.max(0.01, cogsNuvem + opexFixo + impostosGateways);
   const fatias = [
-    { label: "Serviços Cloud (COGS)", valor: cogsNuvem, cor: "#2563EB" },
+    { label: "Serviços Cloud (COGS)", valor: cogsNuvem, cor: "#E30000" },
     { label: "Opex e Despesas Fixas", valor: opexFixo, cor: "#0F172A" },
     { label: "Impostos e Gateways", valor: impostosGateways, cor: "#94A3B8" },
   ];
@@ -255,7 +255,7 @@ export const GraficoMRRTracao: React.FC<{
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
       <div className="flex items-center justify-between text-xs font-semibold mb-2">
-        <span className="text-[#2563EB]">━ Evolução do MRR (R$)</span>
+        <span className="text-[#E30000]">━ Evolução do MRR (R$)</span>
         <span className="text-[#16A34A]">┅ Expansão da Base Paga (Clientes)</span>
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto">
@@ -276,7 +276,7 @@ export const GraficoMRRTracao: React.FC<{
                 y={y + 4}
                 textAnchor="end"
                 fontSize="9"
-                fill="#2563EB"
+                fill="#E30000"
               >
                 {fmtMoedaCurta(p * maxMrr)}
               </text>
@@ -294,7 +294,7 @@ export const GraficoMRRTracao: React.FC<{
         })}
         <polyline
           fill="none"
-          stroke="#2563EB"
+          stroke="#E30000"
           strokeWidth="2.8"
           points={ptsMrr}
         />
